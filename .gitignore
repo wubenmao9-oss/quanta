@@ -1,0 +1,30 @@
+# ---- 密钥 / 环境变量（严禁提交）----
+.env
+*.key
+*.pem
+secrets.*
+
+# ---- Java / Maven ----
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
