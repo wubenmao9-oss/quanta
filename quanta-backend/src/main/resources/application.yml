@@ -96,3 +96,34 @@ quanta:
     supertrend-period: 10
     supertrend-k: 3.0
     adr-period: 14
+  # 风控层（M5）：运行期参数 + 阈值兜底默认（正式阈值以 risk_config 表为准，人工可改）
+  risk:
+    # 合约规格（GOLD 实测 §7.1：1 手 = 100 盎司 → 1 USD 价差 = 100 USD/手）
+    contract-size-per-lot: 100.0
+    point: 0.01
+    volume-step: 0.01
+    volume-min: 0.01
+    # R8 幂等窗口（秒）
+    idempotency-window-seconds: 60
+    # R12 开仓价与市价的最大偏离（%）
+    max-price-deviation-pct: 0.5
+    # R9 点差历史窗口与动态阈值
+    spread-window-minutes: 60
+    spread-min-samples: 12
+    spread-median-multiplier: 3.0
+    # R10 禁开窗口：休市星期 + 每日禁开时段（HH:mm，留空则不启用）
+    closed-weekdays: SATURDAY,SUNDAY
+    daily-blackout-start: ""
+    daily-blackout-end: ""
+    # 阈值兜底默认（risk_config 表为空时生效；表有值以表为准）
+    default-fixed-volume: 0.01
+    default-max-volume: 0.01
+    default-max-positions: 3
+    default-max-daily-loss: 50
+    default-max-risk-pct: 2.00
+    default-min-rr: 1.00
+    default-min-sl-spread-mult: 5.00
+    default-max-consecutive-loss: 3
+    default-cooldown-minutes: 0
+    default-spread-limit: 50
+    default-symbol-whitelist: GOLD
