@@ -4,6 +4,7 @@ import com.benmao.mt5.Mt5;
 import com.benmao.mt5.Mt5Client;
 import com.benmao.mt5.model.AccountInfo;
 import com.benmao.mt5.model.KlineBar;
+import com.benmao.mt5.model.OrderResult;
 import com.benmao.mt5.model.Position;
 import com.benmao.mt5.model.Quote;
 import com.benmao.mt5.model.SessionInfo;
@@ -108,6 +109,33 @@ public class Mt5BridgeService {
     /** 一期默认品种的券商名（GOLD）。 */
     public String defaultSymbol() {
         return mt5.symbols.defaultSymbol();
+    }
+
+    // ==================== 写操作（M6 交易执行；仅 TradingService 调用） ====================
+
+    /**
+     * 市价开仓。{@code buy=true} 买入、{@code false} 卖出；sl/tp 为绝对价格，0 表示不设置。
+     *
+     * <p>注意：券商侧失败会以 {@code OrderResult.success=false} 正常返回（HTTP 200），
+     * 由上层 {@code TradingService} 统一做返回码归一化，本方法只在传输层异常时抛错。
+     */
+    public OrderResult openMarket(String symbol, boolean buy, double volume, double sl, double tp) {
+        ensureLoggedIn();
+        return call("市价开仓", () -> buy
+                ? mt5.trading.buyMarket(symbol, volume, sl, tp)
+                : mt5.trading.sellMarket(symbol, volume, sl, tp));
+    }
+
+    /** 按 ticket 平仓。 */
+    public OrderResult closePosition(String symbol, long ticket) {
+        ensureLoggedIn();
+        return call("平仓", () -> mt5.trading.closePosition(symbol, ticket));
+    }
+
+    /** 修改持仓 SL/TP；sl 或 tp 传 null 表示保留原值（避免把原有止盈/止损清空）。 */
+    public OrderResult modifySlTp(String symbol, long ticket, Double sl, Double tp) {
+        ensureLoggedIn();
+        return call("修改 SL/TP", () -> mt5.trading.modifySlTp(symbol, ticket, sl, tp));
     }
 
     // ==================== 内部实现 ====================

@@ -5,3 +5,7 @@ quanta:
   security:
     # Base64("0123456789abcdef0123456789abcdef") —— 仅测试用，禁止用于任何真实环境
     aes-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+  mt5:
+    # 测试 profile 的 AES 密钥与库内真实凭据的加密密钥不同（解密会 Tag mismatch），
+    # 故测试中不发起"用库内凭据真实登录"，直接复用 mt5_service 自身已登录的会话（与 M3 IT 同思路）。
+    auto-login: false
