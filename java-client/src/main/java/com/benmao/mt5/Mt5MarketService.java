@@ -38,6 +38,18 @@ public class Mt5MarketService {
         });
     }
 
+    /**
+     * 取 [fromEpoch, toEpoch] 区间内的 K 线（UTC epoch 秒），升序。
+     *
+     * <p>历史回填用「区间」而非「偏移」：MT5 终端的偏移翻页只读已加载历史，区间会按需补下更早数据。
+     */
+    public List<KlineBar> getKlinesRange(String symbol, String timeframe, long fromEpoch, long toEpoch) {
+        String path = "/klines/range?symbol=" + enc(symbols.resolve(symbol))
+                + "&timeframe=" + enc(timeframe) + "&from_ts=" + fromEpoch + "&to_ts=" + toEpoch;
+        return client.getList(path, new TypeReference<List<KlineBar>>() {
+        });
+    }
+
     public List<KlineBar> getKlines(String timeframe, int count) {
         return getKlines(config.defaultSymbol(), timeframe, count);
     }

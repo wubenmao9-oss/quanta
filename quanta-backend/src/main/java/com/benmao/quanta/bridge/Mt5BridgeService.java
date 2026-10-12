@@ -87,6 +87,17 @@ public class Mt5BridgeService {
                 () -> mt5.market.getKlines(symbol, timeframe, count));
     }
 
+    /**
+     * 按 [fromEpoch, toEpoch] 区间取 K 线（UTC epoch 秒）。
+     *
+     * <p>历史回填用区间而非偏移（终端偏移翻页取不到更早历史），见 {@code /klines/range}。
+     */
+    public List<KlineBar> klinesRange(String symbol, String timeframe, long fromEpoch, long toEpoch) {
+        ensureLoggedIn();
+        return call("取 " + symbol + " K 线区间",
+                () -> mt5.market.getKlinesRange(symbol, timeframe, fromEpoch, toEpoch));
+    }
+
     /** 持仓；symbol 为空 = 全部品种。 */
     public List<Position> positions(String symbol) {
         ensureLoggedIn();

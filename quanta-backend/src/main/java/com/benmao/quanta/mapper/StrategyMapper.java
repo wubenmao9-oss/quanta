@@ -28,6 +28,10 @@ public interface StrategyMapper {
     @Select("SELECT * FROM strategy ORDER BY id")
     List<Strategy> listAll();
 
+    /** 按 (name, version) 查（唯一键）；回测落库时用于幂等获取内置规则策略行。 */
+    @Select("SELECT * FROM strategy WHERE name = #{name} AND version = #{version}")
+    Strategy findByNameVersion(@Param("name") String name, @Param("version") int version);
+
     @Update("UPDATE strategy SET name = #{name}, prompt = #{prompt}, version = #{version}, status = #{status}, "
             + "parent_id = #{parentId}, origin = #{origin}, approved = #{approved}, regime_type = #{regimeType}, "
             + "target_rr = #{targetRr}, expected_win_rate = #{expectedWinRate}, indicator_params = #{indicatorParams}, "

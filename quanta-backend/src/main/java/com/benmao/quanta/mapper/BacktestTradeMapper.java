@@ -28,6 +28,10 @@ public interface BacktestTradeMapper {
     @Select("SELECT * FROM backtest_trade ORDER BY id")
     List<BacktestTrade> listAll();
 
+    /** 取某次回测的全部交易明细（按开仓时间升序）。 */
+    @Select("SELECT * FROM backtest_trade WHERE run_id = #{runId} ORDER BY open_time")
+    List<BacktestTrade> listByRunId(@Param("runId") Long runId);
+
     @Update("UPDATE backtest_trade SET run_id = #{runId}, open_time = #{openTime}, close_time = #{closeTime}, "
             + "cmd = #{cmd}, volume = #{volume}, open_price = #{openPrice}, close_price = #{closePrice}, sl = #{sl}, "
             + "tp = #{tp}, profit = #{profit}, swap = #{swap}, hold_sec = #{holdSec} WHERE id = #{id}")

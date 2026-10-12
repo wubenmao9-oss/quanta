@@ -395,16 +395,7 @@ def symbols(query: str = Query(""), limit: int = Query(2000, ge=1, le=10000)):
     return {"count": len(names), "default": DEFAULT_SYMBOL, "symbols": names[:limit]}
 
 
-@app.get("/klines")
-def klines(symbol: str = Query(DEFAULT_SYMBOL), timeframe: str = Query("M5"),
-           count: int = Query(200, ge=1, le=5000)):
-    """每根 K 线（OHLCV）。"""
-    tf = TIMEFRAMES.get(timeframe.upper())
-    if tf is None:
-        raise HTTPException(400, f"不支持的周期: {timeframe}，可选 {list(TIMEFRAMES)}")
-    ensure_connected()
-    ensure_symbol(symbol)
-    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+def _rates_to_json(rates) -> list[dict]:
     if rates is None or len(rates) == 0:
         return []
     return [
@@ -412,6 +403,40 @@ def klines(symbol: str = Query(DEFAULT_SYMBOL), timeframe: str = Query("M5"),
          "low": round(float(r[3]), 5), "close": round(float(r[4]), 5), "volume": int(r[5])}
         for r in rates
     ]
+
+
+@app.get("/klines")
+def klines(symbol: str = Query(DEFAULT_SYMBOL), timeframe: str = Query("M5"),
+           count: int = Query(200, ge=1, le=5000)):
+    """每根 K 线（OHLCV），取最近 ``count`` 根。"""
+    tf = TIMEFRAMES.get(timeframe.upper())
+    if tf is None:
+        raise HTTPException(400, f"不支持的周期: {timeframe}，可选 {list(TIMEFRAMES)}")
+    ensure_connected()
+    ensure_symbol(symbol)
+    return _rates_to_json(mt5.copy_rates_from_pos(symbol, tf, 0, count))
+
+
+@app.get("/klines/range")
+def klines_range(symbol: str = Query(DEFAULT_SYMBOL), timeframe: str = Query("M1"),
+                 from_ts: int = Query(..., description="窗口起始（UTC epoch 秒，含）"),
+                 to_ts: int = Query(..., description="窗口结束（UTC epoch 秒，含）")):
+    """按时间区间取 K 线（OHLCV），用于回测历史回填。
+
+    历史回填必须用「区间」而非「偏移」：MT5 终端的 ``copy_rates_from_pos`` 的 start 偏移只读
+    已加载到图表的历史（本地仅数千根），而 ``copy_rates_range`` 会按需向服务器补下历史，
+    因此可稳定取到更早的 M1 数据。
+    """
+    if to_ts <= from_ts:
+        raise HTTPException(400, "to_ts 必须大于 from_ts")
+    tf = TIMEFRAMES.get(timeframe.upper())
+    if tf is None:
+        raise HTTPException(400, f"不支持的周期: {timeframe}，可选 {list(TIMEFRAMES)}")
+    ensure_connected()
+    ensure_symbol(symbol)
+    date_from = datetime.fromtimestamp(from_ts, timezone.utc).replace(tzinfo=None)
+    date_to = datetime.fromtimestamp(to_ts, timezone.utc).replace(tzinfo=None)
+    return _rates_to_json(mt5.copy_rates_range(symbol, tf, date_from, date_to))
 
 
 @app.get("/positions")

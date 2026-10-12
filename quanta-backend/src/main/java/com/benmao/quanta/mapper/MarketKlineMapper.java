@@ -51,4 +51,22 @@ public interface MarketKlineMapper {
                      @Param("low") double low,
                      @Param("close") double close,
                      @Param("volume") long volume);
+
+    // ==================== M8 回测层新增：按区间取 K 线（事件驱动 M1 重放） ====================
+
+    /** 按 [from, to) 区间取 K 线，按 bar_time 升序（回测重放的时间顺序）。 */
+    @Select("SELECT * FROM market_kline WHERE symbol = #{symbol} AND timeframe = #{timeframe} "
+            + "AND bar_time >= #{from} AND bar_time < #{to} ORDER BY bar_time")
+    List<MarketKline> listRange(@Param("symbol") String symbol,
+                                @Param("timeframe") String timeframe,
+                                @Param("from") LocalDateTime from,
+                                @Param("to") LocalDateTime to);
+
+    /** 按 [from, to) 区间统计 K 线根数（回填后核对样本量）。 */
+    @Select("SELECT COUNT(*) FROM market_kline WHERE symbol = #{symbol} AND timeframe = #{timeframe} "
+            + "AND bar_time >= #{from} AND bar_time < #{to}")
+    long countRange(@Param("symbol") String symbol,
+                    @Param("timeframe") String timeframe,
+                    @Param("from") LocalDateTime from,
+                    @Param("to") LocalDateTime to);
 }
