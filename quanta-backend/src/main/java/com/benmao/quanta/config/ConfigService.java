@@ -147,6 +147,27 @@ public class ConfigService {
         return toView(mapper.getById(id));
     }
 
+    /**
+     * 取某类型「激活」配置的明文载荷（供桥接层用库内真实凭据登录 MT5）。
+     *
+     * <p>仅供内部调用，<b>不</b>走掩码（不走接口回显）；无激活配置返回 {@code null}。
+     */
+    public Map<String, Object> activeDecrypted(ConfigType type) {
+        SysConfig active = mapper.listByType(type.name()).stream()
+                .filter(c -> Boolean.TRUE.equals(c.getIsActive()))
+                .findFirst()
+                .orElse(null);
+        if (active == null) {
+            return null;
+        }
+        try {
+            return readJson(crypto.decrypt(active.getConfigJson()));
+        } catch (Exception e) {
+            throw new BizException(ResultCode.SYSTEM_ERROR.code(),
+                    type + " 激活配置解密失败（加密密钥可能已更换）: " + e.getMessage(), 500);
+        }
+    }
+
     // ==================== 内部实现 ====================
 
     private ConnectionTester testerFor(ConfigType type) {

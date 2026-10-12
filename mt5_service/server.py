@@ -1,11 +1,12 @@
 """MT5 本地服务 — 用 MetaTrader5 库封装核心交易能力，供 Java 通过 HTTP 调用。
 
-只做 5 类事（对齐《MT4-AI核心方法技术文档.md》）：
+只做 6 类事（对齐《MT4-AI核心方法技术文档.md》）：
   1) 开仓   POST /order/buy        POST /order/sell
   2) 平仓   POST /order/close       POST /order/close_all
   3) TP/SL  POST /order/modify      （修复了原项目 modify_sl 会把 TP 清零的缺陷）
   4) 行情   GET  /quote             GET  /klines（每根 K 线）
   5) 资金   GET  /account           GET  /positions
+  6) 会话   POST /connect           GET  /symbols（品种清单，支撑名称映射）
 
 运行前提：本机 MT5 终端已安装并登录（本项目为 E:\\mt5\\terminal64.exe）。
 启动：  uvicorn server:app --host 127.0.0.1 --port 8765
@@ -69,6 +70,42 @@ def ensure_connected() -> None:
 def ensure_symbol(symbol: str) -> None:
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError(f"选中品种失败 {symbol}: {mt5.last_error()}")
+
+
+def _session_payload(ok: bool, error: Optional[str] = None) -> dict:
+    """会话状态统一返回体（供 /health 与 /connect 复用）。"""
+    ti = mt5.terminal_info()
+    ai = mt5.account_info()
+    d = {
+        "ok": ok,
+        "terminal_connected": ti is not None,
+        "login": ai.login if ai else None,
+        "server": ai.server if ai else None,
+    }
+    if error:
+        d["error"] = error
+    return d
+
+
+def connect_with_credentials(login: int, password: str, server: str, path: Optional[str] = None) -> dict:
+    """用指定凭据登录 MT5 终端（幂等：已是同一账号则直接返回，不重连）。
+
+    供 Java 侧用 sys_config 里存的 MT5 凭据真实登录（M1 的「测试连接」只探活 /health）。
+    """
+    global _connected
+    ai = mt5.account_info() if _connected else None
+    if ai is not None and int(ai.login) == int(login) and (not server or ai.server == server):
+        return _session_payload(True)
+
+    mt5.shutdown()
+    _connected = False
+    _filling_cache.clear()          # 换账号后填充模式可能不同，必须重新探测
+    kwargs = dict(login=int(login), password=password, server=server)
+    ok = mt5.initialize(path=path, **kwargs) if path else mt5.initialize(**kwargs)
+    if not ok:
+        return _session_payload(False, f"MT5 登录失败: {mt5.last_error()}")
+    _connected = True
+    return _session_payload(True)
 
 
 def get_filling(symbol: str) -> int:
@@ -275,6 +312,13 @@ class ModifyReq(BaseModel):
     tp: Optional[float] = None
 
 
+class ConnectReq(BaseModel):
+    login: Optional[int] = None
+    password: Optional[str] = None
+    server: Optional[str] = None
+    path: Optional[str] = None      # 可选：terminal64.exe 完整路径
+
+
 @app.get("/health")
 def health():
     try:
@@ -289,6 +333,20 @@ def health():
             "server": ai.server if ai else None,
             "currency": ai.currency if ai else None,
         }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/connect")
+def connect(req: ConnectReq):
+    """用指定凭据真实登录 MT5 终端（幂等）。缺省字段回落到 .env 配置。"""
+    login = req.login or MT5_LOGIN
+    password = req.password or MT5_PASSWORD
+    server = req.server or MT5_SERVER
+    if not (login and password and server):
+        return {"ok": False, "error": "缺少凭据：login / password / server 需同时提供"}
+    try:
+        return connect_with_credentials(login, password, server, req.path or MT5_PATH or None)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -323,6 +381,18 @@ def quote(symbol: str = Query(DEFAULT_SYMBOL)):
         "symbol": symbol, "bid": tick.bid, "ask": tick.ask,
         "spread": info.spread, "digits": info.digits, "time": tick.time,
     }
+
+
+@app.get("/symbols")
+def symbols(query: str = Query(""), limit: int = Query(2000, ge=1, le=10000)):
+    """券商可用品种清单（支撑 Java 侧名称映射层：XAUUSD → FxPro 实测名 GOLD）。"""
+    ensure_connected()
+    all_syms = mt5.symbols_get()
+    names = [s.name for s in (all_syms or [])]
+    if query:
+        q = query.upper()
+        names = [n for n in names if q in n.upper()]
+    return {"count": len(names), "default": DEFAULT_SYMBOL, "symbols": names[:limit]}
 
 
 @app.get("/klines")

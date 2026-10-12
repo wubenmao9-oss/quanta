@@ -16,7 +16,8 @@ import java.util.Map;
  * MT5 连接测试：探活本地 mt5_service 的 {@code GET /health}。
  *
  * <p><b>语义说明</b>：本测试验证「桥接服务在线 + MT5 终端已连接」，
- * <b>不校验 sys_config 里存的账号密码</b>——真实凭据登录留到 M3 扩展桥接。
+ * <b>不校验 sys_config 里存的账号密码</b>——它是保存配置时的快速门禁。
+ * 真实凭据登录由 M3 桥接层负责：{@code Mt5BridgeService#connect}（{@code POST /api/mt5/connect}）。
  * 判定成功的条件是 {@code ok == true && terminal_connected == true}。
  */
 @Component

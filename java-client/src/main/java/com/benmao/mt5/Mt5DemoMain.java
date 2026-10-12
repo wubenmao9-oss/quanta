@@ -30,7 +30,7 @@ public class Mt5DemoMain {
         Mt5 mt5 = new Mt5();
 
         System.out.println("========= 1) 连通性 /health =========");
-        Map<String, Object> health = mt5.account.health();
+        Map<String, Object> health = mt5.session.health();
         health.forEach((k, v) -> System.out.println("  " + k + " = " + v));
         if (!Boolean.TRUE.equals(health.get("ok"))) {
             System.out.println("服务未就绪，退出。");
@@ -46,6 +46,8 @@ public class Mt5DemoMain {
         System.out.printf("  浮动盈亏 profit  = %.2f   杠杆=%d%n", acc.profit(), acc.leverage());
 
         System.out.println("\n========= 3) 实时报价 /quote =========");
+        System.out.printf("  名称映射：%s → 券商名 %s（券商清单中存在=%s）%n",
+                symbol, mt5.symbols.resolve(symbol), mt5.symbols.exists(symbol));
         Quote q = mt5.market.getQuote(symbol);
         System.out.printf("  %s  bid=%.2f  ask=%.2f  spread=%.0f  digits=%d%n",
                 q.symbol(), q.bid(), q.ask(), q.spread(), q.digits());
@@ -81,7 +83,7 @@ public class Mt5DemoMain {
         OrderResult buy = mt5.trading.buyMarket(symbol, 0.01, sl, tp);
         System.out.println("  " + buy);
         if (!buy.success()) {
-            System.out.println("  开仓失败：" + explain(buy.retcode()));
+            System.out.println("  开仓失败：" + Mt5ErrorCode.explain(buy.retcode()));
             return;
         }
 
@@ -122,23 +124,5 @@ public class Mt5DemoMain {
 
     private static double round2(double v) {
         return Math.round(v * 100.0) / 100.0;
-    }
-
-    /** 把 MT5 返回码翻译成人话，便于定位失败原因。 */
-    private static String explain(Integer retcode) {
-        if (retcode == null) {
-            return "无返回码（请求未送达，检查本地服务是否启动）";
-        }
-        return switch (retcode) {
-            case 10009 -> "成功";
-            case 10027 -> "MT5 终端的“算法交易 / Algo Trading”按钮未打开";
-            case 10018 -> "市场已休市（周末/节假日），请开盘后再试";
-            case 10019 -> "资金不足";
-            case 10014 -> "手数无效或超出限制";
-            case 10016 -> "止损/止盈价格无效（离市价太近或方向错误）";
-            case 10015 -> "价格无效";
-            case 10013 -> "请求参数无效";
-            default -> "retcode=" + retcode + "，详见 MT5 交易返回码表";
-        };
     }
 }
