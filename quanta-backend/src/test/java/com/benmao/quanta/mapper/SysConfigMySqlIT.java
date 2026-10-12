@@ -1,7 +1,7 @@
 package com.benmao.quanta.mapper;
 
 import com.benmao.quanta.config.crypto.CryptoService;
-import com.benmao.quanta.config.entity.SysConfig;
+import com.benmao.quanta.entity.SysConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;

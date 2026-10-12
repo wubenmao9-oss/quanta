@@ -1,4 +1,4 @@
-package com.benmao.quanta.config.entity;
+package com.benmao.quanta.entity;
 
 import java.time.LocalDateTime;
 

@@ -1,6 +1,6 @@
 package com.benmao.quanta.mapper;
 
-import com.benmao.quanta.config.entity.SysConfig;
+import com.benmao.quanta.entity.SysConfig;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
