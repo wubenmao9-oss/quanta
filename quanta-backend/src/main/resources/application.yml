@@ -56,3 +56,19 @@ quanta:
     symbol: ${QUANTA_MT5_SYMBOL:GOLD}
     # 是否用 sys_config 里激活的 MT5 凭据真实登录桥接服务（测试/离线场景可置 false）
     auto-login: ${QUANTA_MT5_AUTO_LOGIN:true}
+  # 指标层（M4）：参数边界与默认周期一律集中配置（设计 §10 / §18）
+  indicator:
+    period-min: 2
+    period-max: 200
+    boll-k-min: 0.5
+    boll-k-max: 5.0
+    sma-period: 20
+    ema-period: 20
+    rsi-period: 14
+    macd-fast: 12
+    macd-slow: 26
+    macd-signal: 9
+    boll-period: 20
+    boll-k: 2.0
+    atr-period: 14
+    volume-ma-period: 5
