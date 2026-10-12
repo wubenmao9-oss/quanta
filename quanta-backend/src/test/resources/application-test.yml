@@ -1,0 +1,7 @@
+# 测试专用配置（仅 test classpath 生效，通过 @ActiveProfiles("test") 激活）
+# 提供固定的测试 AES 密钥，使 Spring 上下文测试在无 application-local.yml 时也能构建 CryptoService。
+# 注意：文件名必须带 -test，不能叫 application.yml，否则会覆盖主配置。
+quanta:
+  security:
+    # Base64("0123456789abcdef0123456789abcdef") —— 仅测试用，禁止用于任何真实环境
+    aes-key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=

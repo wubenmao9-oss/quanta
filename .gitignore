@@ -34,3 +34,9 @@ RAG的演进与研究发展.pptx
 
 # ---- 本地临时清单（全部完成后删除，不入库）----
 P0落地清单.md
+
+# ---- 本地配置（含真实凭据，严禁提交）----
+quanta-backend/src/main/resources/application-local.yml
+
+# ---- 本地规划文档（不入库）----
+.trae/

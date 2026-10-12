@@ -4,9 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.benmao</groupId>
+    <parent>
+        <groupId>com.benmao</groupId>
+        <artifactId>quanta</artifactId>
+        <version>1.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
     <artifactId>mt5-client</artifactId>
-    <version>1.0.0</version>
     <packaging>jar</packaging>
     <name>MT5 Java Client</name>
     <description>通过本地 Python 服务调用 MetaTrader5 的 Java 客户端（开仓/平仓/TP-SL/K线/账户）</description>
@@ -14,14 +19,13 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <jackson.version>2.17.2</jackson.version>
     </properties>
 
     <dependencies>
+        <!-- 版本由 Spring Boot BOM 统一管理，避免与后端模块的 Jackson 版本冲突 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>${jackson.version}</version>
         </dependency>
     </dependencies>
 
