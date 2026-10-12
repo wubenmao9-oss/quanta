@@ -126,6 +126,19 @@ class IndicatorControllerTest {
                 .andExpect(jsonPath("$.data.perRule.sma5Gt4200").value(true));
     }
 
+    @Test
+    @DisplayName("POST /api/indicator/compute：扩展指标（ADX 三线）可经接口调用")
+    void extensionIndicatorReturnsSeries() throws Exception {
+        mvc.perform(post("/api/indicator/compute").contentType(MediaType.APPLICATION_JSON)
+                        .content(computeBody("ADX", Map.of("period", 14), bars(40))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.indicator").value("ADX"))
+                .andExpect(jsonPath("$.data.params.period").value(14))
+                .andExpect(jsonPath("$.data.series.plusDi.length()").value(40))
+                .andExpect(jsonPath("$.data.series.minusDi.length()").value(40))
+                .andExpect(jsonPath("$.data.series.adx.length()").value(40));
+    }
+
     // ---------------- 工具 ----------------
 
     private String computeBody(String indicator, Map<String, Object> params, List<KlineBar> klines) throws Exception {

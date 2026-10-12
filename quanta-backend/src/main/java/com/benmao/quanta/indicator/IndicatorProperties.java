@@ -36,6 +36,33 @@ public class IndicatorProperties {
     private int atrPeriod = 14;
     private int volumeMaPeriod = 5;
 
+    /** 通道/趋势类 ATR 倍数的合法下界。 */
+    private double multiplierMin = 0.5;
+
+    /** 通道/趋势类 ATR 倍数的合法上界。 */
+    private double multiplierMax = 5.0;
+
+    private int adxPeriod = 14;
+    private int aroonPeriod = 14;
+    private int stochPeriod = 9;
+    private int stochKPeriod = 3;
+    private int stochDPeriod = 3;
+    private int cciPeriod = 20;
+    private int willrPeriod = 14;
+    private int rocPeriod = 10;
+    private int keltnerPeriod = 20;
+    private double keltnerK = 2.0;
+    private int donchianPeriod = 20;
+    private int bbwPeriod = 20;
+    private double bbwK = 2.0;
+    private int bbpPeriod = 20;
+    private double bbpK = 2.0;
+    private int stddevPeriod = 20;
+    private int chopPeriod = 14;
+    private int supertrendPeriod = 10;
+    private double supertrendK = 3.0;
+    private int adrPeriod = 14;
+
     public int getPeriodMin() {
         return periodMin;
     }
@@ -146,5 +173,181 @@ public class IndicatorProperties {
 
     public void setVolumeMaPeriod(int volumeMaPeriod) {
         this.volumeMaPeriod = volumeMaPeriod;
+    }
+
+    public double getMultiplierMin() {
+        return multiplierMin;
+    }
+
+    public void setMultiplierMin(double multiplierMin) {
+        this.multiplierMin = multiplierMin;
+    }
+
+    public double getMultiplierMax() {
+        return multiplierMax;
+    }
+
+    public void setMultiplierMax(double multiplierMax) {
+        this.multiplierMax = multiplierMax;
+    }
+
+    public int getAdxPeriod() {
+        return adxPeriod;
+    }
+
+    public void setAdxPeriod(int adxPeriod) {
+        this.adxPeriod = adxPeriod;
+    }
+
+    public int getAroonPeriod() {
+        return aroonPeriod;
+    }
+
+    public void setAroonPeriod(int aroonPeriod) {
+        this.aroonPeriod = aroonPeriod;
+    }
+
+    public int getStochPeriod() {
+        return stochPeriod;
+    }
+
+    public void setStochPeriod(int stochPeriod) {
+        this.stochPeriod = stochPeriod;
+    }
+
+    public int getStochKPeriod() {
+        return stochKPeriod;
+    }
+
+    public void setStochKPeriod(int stochKPeriod) {
+        this.stochKPeriod = stochKPeriod;
+    }
+
+    public int getStochDPeriod() {
+        return stochDPeriod;
+    }
+
+    public void setStochDPeriod(int stochDPeriod) {
+        this.stochDPeriod = stochDPeriod;
+    }
+
+    public int getCciPeriod() {
+        return cciPeriod;
+    }
+
+    public void setCciPeriod(int cciPeriod) {
+        this.cciPeriod = cciPeriod;
+    }
+
+    public int getWillrPeriod() {
+        return willrPeriod;
+    }
+
+    public void setWillrPeriod(int willrPeriod) {
+        this.willrPeriod = willrPeriod;
+    }
+
+    public int getRocPeriod() {
+        return rocPeriod;
+    }
+
+    public void setRocPeriod(int rocPeriod) {
+        this.rocPeriod = rocPeriod;
+    }
+
+    public int getKeltnerPeriod() {
+        return keltnerPeriod;
+    }
+
+    public void setKeltnerPeriod(int keltnerPeriod) {
+        this.keltnerPeriod = keltnerPeriod;
+    }
+
+    public double getKeltnerK() {
+        return keltnerK;
+    }
+
+    public void setKeltnerK(double keltnerK) {
+        this.keltnerK = keltnerK;
+    }
+
+    public int getDonchianPeriod() {
+        return donchianPeriod;
+    }
+
+    public void setDonchianPeriod(int donchianPeriod) {
+        this.donchianPeriod = donchianPeriod;
+    }
+
+    public int getBbwPeriod() {
+        return bbwPeriod;
+    }
+
+    public void setBbwPeriod(int bbwPeriod) {
+        this.bbwPeriod = bbwPeriod;
+    }
+
+    public double getBbwK() {
+        return bbwK;
+    }
+
+    public void setBbwK(double bbwK) {
+        this.bbwK = bbwK;
+    }
+
+    public int getBbpPeriod() {
+        return bbpPeriod;
+    }
+
+    public void setBbpPeriod(int bbpPeriod) {
+        this.bbpPeriod = bbpPeriod;
+    }
+
+    public double getBbpK() {
+        return bbpK;
+    }
+
+    public void setBbpK(double bbpK) {
+        this.bbpK = bbpK;
+    }
+
+    public int getStddevPeriod() {
+        return stddevPeriod;
+    }
+
+    public void setStddevPeriod(int stddevPeriod) {
+        this.stddevPeriod = stddevPeriod;
+    }
+
+    public int getChopPeriod() {
+        return chopPeriod;
+    }
+
+    public void setChopPeriod(int chopPeriod) {
+        this.chopPeriod = chopPeriod;
+    }
+
+    public int getSupertrendPeriod() {
+        return supertrendPeriod;
+    }
+
+    public void setSupertrendPeriod(int supertrendPeriod) {
+        this.supertrendPeriod = supertrendPeriod;
+    }
+
+    public double getSupertrendK() {
+        return supertrendK;
+    }
+
+    public void setSupertrendK(double supertrendK) {
+        this.supertrendK = supertrendK;
+    }
+
+    public int getAdrPeriod() {
+        return adrPeriod;
+    }
+
+    public void setAdrPeriod(int adrPeriod) {
+        this.adrPeriod = adrPeriod;
     }
 }

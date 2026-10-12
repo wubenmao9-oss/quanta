@@ -67,6 +67,52 @@ public class IndicatorService {
                 out.put("dea", r.dea());
                 out.put("hist", r.hist());
             }
+            case ADX -> {
+                AdxResult r = adx(bars, (int) p.get("period"));
+                out.put("plusDi", r.plusDi());
+                out.put("minusDi", r.minusDi());
+                out.put("adx", r.adx());
+            }
+            case AROON -> {
+                AroonResult r = aroon(bars, (int) p.get("period"));
+                out.put("up", r.up());
+                out.put("down", r.down());
+                out.put("osc", r.osc());
+            }
+            case STOCH -> {
+                StochResult r = stoch(bars, (int) p.get("period"),
+                        (int) p.get("kSmooth"), (int) p.get("dSmooth"));
+                out.put("k", r.k());
+                out.put("d", r.d());
+                out.put("j", r.j());
+            }
+            case CCI -> out.put("value", cci(bars, (int) p.get("period")));
+            case WILLR -> out.put("value", willr(bars, (int) p.get("period")));
+            case ROC -> out.put("value", roc(closes(bars), (int) p.get("period")));
+            case DONCHIAN -> {
+                DonchianResult r = donchian(bars, (int) p.get("period"));
+                out.put("upper", r.upper());
+                out.put("mid", r.mid());
+                out.put("lower", r.lower());
+            }
+            case STDDEV -> out.put("value", stddev(closes(bars), (int) p.get("period")));
+            case CHOP -> out.put("value", choppiness(bars, (int) p.get("period")));
+            case ADR -> out.put("value", adr(bars, (int) p.get("period")));
+            case KELTNER -> {
+                KeltnerResult r = keltner(bars, (int) p.get("period"), (double) p.get("k"));
+                out.put("mid", r.mid());
+                out.put("upper", r.upper());
+                out.put("lower", r.lower());
+            }
+            case SUPERTREND -> {
+                SupertrendResult r = supertrend(bars, (int) p.get("period"), (double) p.get("k"));
+                out.put("line", r.line());
+                out.put("direction", r.direction());
+            }
+            case BBW -> out.put("value",
+                    bbWidth(closes(bars), (int) p.get("period"), (double) p.get("k")));
+            case BBP -> out.put("value",
+                    bbPercent(closes(bars), (int) p.get("period"), (double) p.get("k")));
         }
         return out;
     }
@@ -236,6 +282,340 @@ public class IndicatorService {
         return sma(volume(bars), period);
     }
 
+    // ==================== 指标原语（多样化扩展，仍为纯函数） ====================
+
+    /** 动向指标 DMI/ADX（Wilder 平滑）：+DI / −DI 在索引 period 起有效，ADX 在索引 2·period−1 起有效。 */
+    public AdxResult adx(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] plusDi = nanArray(m);
+        double[] minusDi = nanArray(m);
+        double[] adx = nanArray(m);
+        if (m <= period) {
+            return new AdxResult(plusDi, minusDi, adx);
+        }
+        double[] tr = trueRange(bars);
+        double[] pdm = new double[m];
+        double[] ndm = new double[m];
+        for (int i = 1; i < m; i++) {
+            KlineBar b = bars.get(i);
+            KlineBar prev = bars.get(i - 1);
+            double up = b.high() - prev.high();
+            double dn = prev.low() - b.low();
+            pdm[i] = (up > dn && up > 0) ? up : 0;
+            ndm[i] = (dn > up && dn > 0) ? dn : 0;
+        }
+        double sTr = 0;
+        double sPdm = 0;
+        double sNdm = 0;
+        for (int i = 1; i <= period; i++) {
+            sTr += tr[i];
+            sPdm += pdm[i];
+            sNdm += ndm[i];
+        }
+        double[] dx = nanArray(m);
+        for (int i = period; i < m; i++) {
+            if (i > period) {
+                sTr = sTr - sTr / period + tr[i];
+                sPdm = sPdm - sPdm / period + pdm[i];
+                sNdm = sNdm - sNdm / period + ndm[i];
+            }
+            double pdi = sTr == 0 ? 0 : 100.0 * sPdm / sTr;
+            double ndi = sTr == 0 ? 0 : 100.0 * sNdm / sTr;
+            plusDi[i] = pdi;
+            minusDi[i] = ndi;
+            double sum = pdi + ndi;
+            dx[i] = sum == 0 ? 0 : 100.0 * Math.abs(pdi - ndi) / sum;
+        }
+        int first = 2 * period - 1;
+        if (first < m) {
+            double sum = 0;
+            for (int i = period; i <= first; i++) {
+                sum += dx[i];
+            }
+            adx[first] = sum / period;
+            for (int i = first + 1; i < m; i++) {
+                adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period;
+            }
+        }
+        return new AdxResult(plusDi, minusDi, adx);
+    }
+
+    /** 阿隆指标：窗口 period+1 内最高/最低价距当前的时间占比；并列极值取<b>最近</b>一根。 */
+    public AroonResult aroon(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] up = nanArray(m);
+        double[] down = nanArray(m);
+        double[] osc = nanArray(m);
+        for (int i = period; i < m; i++) {
+            int hiIdx = i - period;
+            int loIdx = i - period;
+            double hi = bars.get(i - period).high();
+            double lo = bars.get(i - period).low();
+            for (int j = i - period + 1; j <= i; j++) {
+                double h = bars.get(j).high();
+                double l = bars.get(j).low();
+                if (h >= hi) {
+                    hi = h;
+                    hiIdx = j;
+                }
+                if (l <= lo) {
+                    lo = l;
+                    loIdx = j;
+                }
+            }
+            up[i] = 100.0 * (period - (i - hiIdx)) / period;
+            down[i] = 100.0 * (period - (i - loIdx)) / period;
+            osc[i] = up[i] - down[i];
+        }
+        return new AroonResult(up, down, osc);
+    }
+
+    /** 随机指标 KDJ：RSV 经 kSmooth/dSmooth 的 1/n 指数平滑（初始 50），J = 3K − 2D。 */
+    public StochResult stoch(List<KlineBar> bars, int period, int kSmooth, int dSmooth) {
+        int m = bars.size();
+        double[] k = nanArray(m);
+        double[] d = nanArray(m);
+        double[] j = nanArray(m);
+        if (m < period) {
+            return new StochResult(k, d, j);
+        }
+        double[] rsv = nanArray(m);
+        for (int i = period - 1; i < m; i++) {
+            double hh = bars.get(i - period + 1).high();
+            double ll = bars.get(i - period + 1).low();
+            for (int t = i - period + 2; t <= i; t++) {
+                hh = Math.max(hh, bars.get(t).high());
+                ll = Math.min(ll, bars.get(t).low());
+            }
+            double range = hh - ll;
+            double c = bars.get(i).close();
+            rsv[i] = range == 0 ? 50.0 : (c - ll) / range * 100.0;
+        }
+        double aK = 1.0 / kSmooth;
+        double aD = 1.0 / dSmooth;
+        double kPrev = 50.0;
+        double dPrev = 50.0;
+        for (int i = period - 1; i < m; i++) {
+            k[i] = aK * rsv[i] + (1 - aK) * kPrev;
+            d[i] = aD * k[i] + (1 - aD) * dPrev;
+            j[i] = 3 * k[i] - 2 * d[i];
+            kPrev = k[i];
+            dPrev = d[i];
+        }
+        return new StochResult(k, d, j);
+    }
+
+    /** 商品通道指数：CCI = (TP − SMA(TP)) / (0.015 × 平均绝对偏差)。 */
+    public double[] cci(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] out = nanArray(m);
+        double[] tp = new double[m];
+        for (int i = 0; i < m; i++) {
+            KlineBar b = bars.get(i);
+            tp[i] = (b.high() + b.low() + b.close()) / 3.0;
+        }
+        for (int i = period - 1; i < m; i++) {
+            double mean = 0;
+            for (int t = i - period + 1; t <= i; t++) {
+                mean += tp[t];
+            }
+            mean /= period;
+            double dev = 0;
+            for (int t = i - period + 1; t <= i; t++) {
+                dev += Math.abs(tp[t] - mean);
+            }
+            dev /= period;
+            out[i] = dev == 0 ? 0 : (tp[i] - mean) / (0.015 * dev);
+        }
+        return out;
+    }
+
+    /** 威廉指标：WILLR = −100 × (HH − close) / (HH − LL)，范围 [−100, 0]。 */
+    public double[] willr(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] out = nanArray(m);
+        for (int i = period - 1; i < m; i++) {
+            double hh = bars.get(i - period + 1).high();
+            double ll = bars.get(i - period + 1).low();
+            for (int t = i - period + 2; t <= i; t++) {
+                hh = Math.max(hh, bars.get(t).high());
+                ll = Math.min(ll, bars.get(t).low());
+            }
+            double range = hh - ll;
+            out[i] = range == 0 ? 0 : -100.0 * (hh - bars.get(i).close()) / range;
+        }
+        return out;
+    }
+
+    /** 变动率：ROC = (close − close[−period]) / close[−period] × 100。 */
+    public double[] roc(double[] values, int period) {
+        double[] out = nanArray(values.length);
+        for (int i = period; i < values.length; i++) {
+            double prev = values[i - period];
+            out[i] = prev == 0 ? 0 : (values[i] - prev) / prev * 100.0;
+        }
+        return out;
+    }
+
+    /** 肯特纳通道：中轨 = EMA(close)，上下轨 = 中轨 ± k × ATR(Wilder)。 */
+    public KeltnerResult keltner(List<KlineBar> bars, int period, double k) {
+        int m = bars.size();
+        double[] mid = ema(closes(bars), period);
+        double[] a = atr(bars, period);
+        double[] upper = nanArray(m);
+        double[] lower = nanArray(m);
+        for (int i = 0; i < m; i++) {
+            if (!Double.isNaN(mid[i]) && !Double.isNaN(a[i])) {
+                upper[i] = mid[i] + k * a[i];
+                lower[i] = mid[i] - k * a[i];
+            }
+        }
+        return new KeltnerResult(mid, upper, lower);
+    }
+
+    /** 唐奇安通道：N 周期最高价（上轨）/最低价（下轨），中轨为其均值。 */
+    public DonchianResult donchian(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] upper = nanArray(m);
+        double[] mid = nanArray(m);
+        double[] lower = nanArray(m);
+        for (int i = period - 1; i < m; i++) {
+            double hh = bars.get(i - period + 1).high();
+            double ll = bars.get(i - period + 1).low();
+            for (int t = i - period + 2; t <= i; t++) {
+                hh = Math.max(hh, bars.get(t).high());
+                ll = Math.min(ll, bars.get(t).low());
+            }
+            upper[i] = hh;
+            lower[i] = ll;
+            mid[i] = (hh + ll) / 2.0;
+        }
+        return new DonchianResult(upper, mid, lower);
+    }
+
+    /** 布林带宽度：BBW = (上轨 − 下轨) / 中轨 × 100。 */
+    public double[] bbWidth(double[] values, int period, double k) {
+        BollResult b = boll(values, period, k);
+        double[] out = nanArray(values.length);
+        for (int i = 0; i < values.length; i++) {
+            if (!Double.isNaN(b.mid()[i])) {
+                out[i] = b.mid()[i] == 0 ? 0 : (b.upper()[i] - b.lower()[i]) / b.mid()[i] * 100.0;
+            }
+        }
+        return out;
+    }
+
+    /** 布林带百分比：%B = (close − 下轨) / (上轨 − 下轨)，1 表示贴上轨、0 表示贴下轨。 */
+    public double[] bbPercent(double[] values, int period, double k) {
+        BollResult b = boll(values, period, k);
+        double[] out = nanArray(values.length);
+        for (int i = 0; i < values.length; i++) {
+            if (!Double.isNaN(b.upper()[i])) {
+                double width = b.upper()[i] - b.lower()[i];
+                out[i] = width == 0 ? 0.5 : (values[i] - b.lower()[i]) / width;
+            }
+        }
+        return out;
+    }
+
+    /** 滚动标准差（总体标准差，除以 N）。 */
+    public double[] stddev(double[] values, int period) {
+        double[] out = nanArray(values.length);
+        for (int i = period - 1; i < values.length; i++) {
+            double mean = 0;
+            for (int t = i - period + 1; t <= i; t++) {
+                mean += values[t];
+            }
+            mean /= period;
+            double sq = 0;
+            for (int t = i - period + 1; t <= i; t++) {
+                double df = values[t] - mean;
+                sq += df * df;
+            }
+            out[i] = Math.sqrt(sq / period);
+        }
+        return out;
+    }
+
+    /** 震荡指数：CHOP = 100 × log10(Σ TR / (HH − LL)) / log10(period)，越高越盘整。 */
+    public double[] choppiness(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] out = nanArray(m);
+        if (period < 2) {
+            return out;
+        }
+        double[] tr = trueRange(bars);
+        for (int i = period - 1; i < m; i++) {
+            double sumTr = 0;
+            double hh = bars.get(i - period + 1).high();
+            double ll = bars.get(i - period + 1).low();
+            for (int t = i - period + 1; t <= i; t++) {
+                sumTr += tr[t];
+                hh = Math.max(hh, bars.get(t).high());
+                ll = Math.min(ll, bars.get(t).low());
+            }
+            double range = hh - ll;
+            if (range > 0 && sumTr > 0) {
+                out[i] = 100.0 * Math.log10(sumTr / range) / Math.log10(period);
+            }
+        }
+        return out;
+    }
+
+    /** 日均波幅：N 周期内 (high − low) 的算术平均。 */
+    public double[] adr(List<KlineBar> bars, int period) {
+        int m = bars.size();
+        double[] out = nanArray(m);
+        for (int i = period - 1; i < m; i++) {
+            double sum = 0;
+            for (int t = i - period + 1; t <= i; t++) {
+                sum += bars.get(t).high() - bars.get(t).low();
+            }
+            out[i] = sum / period;
+        }
+        return out;
+    }
+
+    /** 超级趋势：基于 ATR 的通道；{@code direction}=1 为多头（落在下轨）、−1 为空头（落在上轨）。 */
+    public SupertrendResult supertrend(List<KlineBar> bars, int period, double k) {
+        int m = bars.size();
+        double[] line = nanArray(m);
+        double[] direction = nanArray(m);
+        double[] a = atr(bars, period);
+        int start = firstValid(a);
+        if (start < 0) {
+            return new SupertrendResult(line, direction);
+        }
+        double finalUpper = 0;
+        double finalLower = 0;
+        double trend = 0;
+        for (int i = start; i < m; i++) {
+            KlineBar b = bars.get(i);
+            double hl2 = (b.high() + b.low()) / 2.0;
+            double basicUpper = hl2 + k * a[i];
+            double basicLower = hl2 - k * a[i];
+            if (i == start) {
+                finalUpper = basicUpper;
+                finalLower = basicLower;
+                trend = b.close() >= hl2 ? 1 : -1;
+            } else {
+                double prevClose = bars.get(i - 1).close();
+                double prevUpper = finalUpper;
+                double prevLower = finalLower;
+                finalUpper = (basicUpper < prevUpper || prevClose > prevUpper) ? basicUpper : prevUpper;
+                finalLower = (basicLower > prevLower || prevClose < prevLower) ? basicLower : prevLower;
+                if (b.close() > prevUpper) {
+                    trend = 1;
+                } else if (b.close() < prevLower) {
+                    trend = -1;
+                }
+            }
+            line[i] = trend == 1 ? finalLower : finalUpper;
+            direction[i] = trend;
+        }
+        return new SupertrendResult(line, direction);
+    }
+
     // ==================== 指标组 ====================
 
     /** 在最后一根 K 线上评估指标组。 */
@@ -371,9 +751,45 @@ public class IndicatorService {
         return -1;
     }
 
+    /** 真实波幅序列（TR[0] 用 high−low）。 */
+    private static double[] trueRange(List<KlineBar> bars) {
+        int m = bars.size();
+        double[] tr = new double[m];
+        if (m == 0) {
+            return tr;
+        }
+        KlineBar first = bars.get(0);
+        tr[0] = first.high() - first.low();
+        for (int i = 1; i < m; i++) {
+            KlineBar b = bars.get(i);
+            KlineBar prev = bars.get(i - 1);
+            tr[i] = Math.max(b.high() - b.low(),
+                    Math.max(Math.abs(b.high() - prev.close()), Math.abs(b.low() - prev.close())));
+        }
+        return tr;
+    }
+
     /** MACD 三线。 */
     public record MacdResult(double[] dif, double[] dea, double[] hist) {}
 
     /** 布林带三轨。 */
     public record BollResult(double[] mid, double[] upper, double[] lower) {}
+
+    /** 动向指标三线。 */
+    public record AdxResult(double[] plusDi, double[] minusDi, double[] adx) {}
+
+    /** 阿隆指标三线。 */
+    public record AroonResult(double[] up, double[] down, double[] osc) {}
+
+    /** 随机指标 KDJ 三线。 */
+    public record StochResult(double[] k, double[] d, double[] j) {}
+
+    /** 肯特纳通道三轨。 */
+    public record KeltnerResult(double[] mid, double[] upper, double[] lower) {}
+
+    /** 唐奇安通道三轨。 */
+    public record DonchianResult(double[] upper, double[] mid, double[] lower) {}
+
+    /** 超级趋势：趋势线 + 方向（1 多头 / −1 空头）。 */
+    public record SupertrendResult(double[] line, double[] direction) {}
 }

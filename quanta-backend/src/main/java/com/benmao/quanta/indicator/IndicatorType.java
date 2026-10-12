@@ -8,7 +8,15 @@ import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
- * 一期支持的指标（设计 §10）：EMA / SMA / RSI / MACD / BOLL / ATR / 成交量。
+ * 一期支持的指标（设计 §10）：基础 7 个（EMA/SMA/RSI/MACD/BOLL/ATR/成交量）
+ * + 多样化扩展 14 个（ADX/Aroon/Stoch/CCI/WILLR/ROC/Keltner/Donchian/BBW/%B/StdDev/Choppiness/Supertrend/ADR）。
+ *
+ * <p>扩展指标全部<b>只消费 OHLCV</b>、<b>不重绘</b>、<b>可参数化</b>：
+ * <ul>
+ *   <li>排除量价类（GOLD 是 tick volume，失真）；</li>
+ *   <li>排除重绘/未来函数类（ZigZag / Nadaraya-Watson / MESA 等）；</li>
+ *   <li>排除数据不可得类（CVD / TPO / VPVR / 筹码分布 等）。</li>
+ * </ul>
  *
  * <p>每个指标声明其默认输出字段（"指标组"里不指定 field 时用它）。
  */
@@ -20,7 +28,21 @@ public enum IndicatorType {
     MACD("dif"),
     BOLL("mid"),
     ATR("value"),
-    VOLUME("volume");
+    VOLUME("volume"),
+    ADX("adx"),
+    AROON("osc"),
+    STOCH("k"),
+    CCI("value"),
+    WILLR("value"),
+    ROC("value"),
+    KELTNER("mid"),
+    DONCHIAN("mid"),
+    BBW("value"),
+    BBP("value"),
+    STDDEV("value"),
+    CHOP("value"),
+    SUPERTREND("line"),
+    ADR("value");
 
     private final String defaultField;
 

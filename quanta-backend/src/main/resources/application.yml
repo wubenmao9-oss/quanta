@@ -72,3 +72,27 @@ quanta:
     boll-k: 2.0
     atr-period: 14
     volume-ma-period: 5
+    # 通道/趋势类系数的合法边界（Keltner / Supertrend 的 ATR 倍数）
+    multiplier-min: 0.5
+    multiplier-max: 5.0
+    # 多样化扩展指标的默认参数
+    adx-period: 14
+    aroon-period: 14
+    stoch-period: 9
+    stoch-k-period: 3
+    stoch-d-period: 3
+    cci-period: 20
+    willr-period: 14
+    roc-period: 10
+    keltner-period: 20
+    keltner-k: 2.0
+    donchian-period: 20
+    bbw-period: 20
+    bbw-k: 2.0
+    bbp-period: 20
+    bbp-k: 2.0
+    stddev-period: 20
+    chop-period: 14
+    supertrend-period: 10
+    supertrend-k: 3.0
+    adr-period: 14

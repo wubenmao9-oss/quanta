@@ -46,6 +46,38 @@ public class IndicatorParamValidator {
                 out.put("slow", slow);
                 out.put("signal", signal);
             }
+            case ADX -> out.put("period", period(type, in, "period", props.getAdxPeriod()));
+            case AROON -> out.put("period", period(type, in, "period", props.getAroonPeriod()));
+            case STOCH -> {
+                out.put("period", period(type, in, "period", props.getStochPeriod()));
+                out.put("kSmooth", period(type, in, "kSmooth", props.getStochKPeriod()));
+                out.put("dSmooth", period(type, in, "dSmooth", props.getStochDPeriod()));
+            }
+            case CCI -> out.put("period", period(type, in, "period", props.getCciPeriod()));
+            case WILLR -> out.put("period", period(type, in, "period", props.getWillrPeriod()));
+            case ROC -> out.put("period", period(type, in, "period", props.getRocPeriod()));
+            case DONCHIAN -> out.put("period", period(type, in, "period", props.getDonchianPeriod()));
+            case STDDEV -> out.put("period", period(type, in, "period", props.getStddevPeriod()));
+            case CHOP -> out.put("period", period(type, in, "period", props.getChopPeriod()));
+            case ADR -> out.put("period", period(type, in, "period", props.getAdrPeriod()));
+            case KELTNER -> {
+                out.put("period", period(type, in, "period", props.getKeltnerPeriod()));
+                out.put("k", decimal(type, in, "k", props.getKeltnerK(),
+                        props.getMultiplierMin(), props.getMultiplierMax()));
+            }
+            case SUPERTREND -> {
+                out.put("period", period(type, in, "period", props.getSupertrendPeriod()));
+                out.put("k", decimal(type, in, "k", props.getSupertrendK(),
+                        props.getMultiplierMin(), props.getMultiplierMax()));
+            }
+            case BBW -> {
+                out.put("period", period(type, in, "period", props.getBbwPeriod()));
+                out.put("k", bollK(type, in, "k", props.getBbwK()));
+            }
+            case BBP -> {
+                out.put("period", period(type, in, "period", props.getBbpPeriod()));
+                out.put("k", bollK(type, in, "k", props.getBbpK()));
+            }
         }
         return out;
     }
@@ -66,6 +98,12 @@ public class IndicatorParamValidator {
 
     /** 解析并校验 BOLL 标准差系数（可为小数）。 */
     public double bollK(IndicatorType type, Map<String, Object> params, String key, double defaultValue) {
+        return decimal(type, params, key, defaultValue, props.getBollKMin(), props.getBollKMax());
+    }
+
+    /** 解析并校验一个小数系数（如 BOLL 的 k、通道/趋势类的 ATR 倍数），越界回执合法区间。 */
+    public double decimal(IndicatorType type, Map<String, Object> params, String key,
+                          double defaultValue, double min, double max) {
         Object raw = params == null ? null : params.get(key);
         if (raw == null || (raw instanceof String s && s.isBlank())) {
             return defaultValue;
@@ -80,9 +118,9 @@ public class IndicatorParamValidator {
                 throw reject(type, key + "=" + raw, "必须为数值");
             }
         }
-        if (value < props.getBollKMin() || value > props.getBollKMax()) {
+        if (value < min || value > max) {
             throw reject(type, key + "=" + raw,
-                    "合法范围 [" + props.getBollKMin() + ", " + props.getBollKMax() + "]");
+                    "合法范围 [" + min + ", " + max + "]");
         }
         return value;
     }
