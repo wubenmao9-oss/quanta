@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 /** trade_plan 的持久化操作（注解 SQL；列名 → 字段靠 map-underscore-to-camel-case）。 */
@@ -32,4 +33,15 @@ public interface TradePlanMapper {
 
     @Delete("DELETE FROM trade_plan WHERE id = #{id}")
     int deleteById(@Param("id") Long id);
+
+    // ==================== M7 调度层新增：T1「到预期位」取未过期计划 ====================
+
+    /** 取仍生效、未过期的计划（供 T1 到价触发；过期判断在 DB 侧完成，避免把过期项拉进内存）。 */
+    @Select("SELECT * FROM trade_plan WHERE status = 'PENDING' "
+            + "AND (expire_at IS NULL OR expire_at > #{now}) ORDER BY id")
+    List<TradePlan> listPendingUnexpired(@Param("now") LocalDateTime now);
+
+    /** 定向更新计划状态（命中后置 TRIGGERED，避免重复触发）。 */
+    @Update("UPDATE trade_plan SET status = #{status} WHERE id = #{id}")
+    int updateStatus(@Param("id") Long id, @Param("status") String status);
 }

@@ -127,3 +127,53 @@ quanta:
     default-cooldown-minutes: 0
     default-spread-limit: 50
     default-symbol-whitelist: GOLD
+  # 调度层（M7）：盯盘 / 触发 / 会话窗口（省 Token 的核心：Java 盯盘，命中才唤醒）
+  schedule:
+    # 总开关：关闭后 MarketWatcher 与 TriggerEngine 都不工作
+    enabled: ${QUANTA_SCHEDULE_ENABLED:true}
+    # 盯盘品种（券商真实名，一期 GOLD）
+    symbol: ${QUANTA_MT5_SYMBOL:GOLD}
+    # 会话窗口数上限，合法范围 1~20（设计 §6.3）
+    max-session: 5
+    market-watcher:
+      enabled: true
+      # 轮询间隔（毫秒）
+      poll-interval-ms: 2000
+      timeframe: M5
+      kline-count: 200
+      # 断线退避重连：起始 / 上限（毫秒）
+      reconnect-base-ms: 2000
+      reconnect-max-ms: 60000
+      # 盯到的 K 线去重落库（market_kline）；失败不影响盯盘
+      persist-klines: true
+    trigger:
+      # 扫描间隔（毫秒）
+      scan-interval-ms: 1000
+      # 每个触发源一个独立开关（T1/T2/T5/T6/T7 必做默认开；T3/T4 插件默认关；T8 二期）
+      switches:
+        T1: true
+        T2: true
+        T3: false
+        T4: false
+        T5: true
+        T6: true
+        T7: true
+        T8: false
+      # T2 时间驱动
+      time:
+        # 每 N 秒唤醒一次（设计「每 N 分钟」的细粒度等价；<=0 关闭）
+        interval-seconds: 300
+        # 每根 K 线收盘是否也唤醒
+        bar-close: false
+      # T5 持仓事件（浮动盈亏阈值，USD）
+      position-event:
+        profit-threshold: 5.0
+        loss-threshold: 5.0
+      # T3 形态插件（放量 + 吞没）
+      pattern:
+        volume-spike-multiplier: 1.8
+        volume-ma-period: 20
+      # T4 指标插件（RSI + 布林带）
+      indicator:
+        rsi-overbought: 70.0
+        rsi-oversold: 30.0

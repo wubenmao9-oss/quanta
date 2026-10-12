@@ -9,3 +9,7 @@ quanta:
     # 测试 profile 的 AES 密钥与库内真实凭据的加密密钥不同（解密会 Tag mismatch），
     # 故测试中不发起"用库内凭据真实登录"，直接复用 mt5_service 自身已登录的会话（与 M3 IT 同思路）。
     auto-login: false
+  schedule:
+    # 测试环境关闭后台定时任务，避免盯盘/触发在其它用例中产生干扰与噪声日志；
+    # M7 用例直接调用 MarketWatcher.poll() / TriggerEngine.scan() 验证行为。
+    enabled: false
