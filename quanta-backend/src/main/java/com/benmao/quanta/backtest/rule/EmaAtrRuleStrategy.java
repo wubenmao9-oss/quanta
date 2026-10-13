@@ -54,6 +54,18 @@ public class EmaAtrRuleStrategy implements RuleStrategy {
                 p.getAtrStopMult(), p.getTargetRr());
     }
 
+    @Override
+    public java.util.Map<String, Object> indicatorParams() {
+        BacktestProperties.Strategy p = props.getStrategy();
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("emaFast", p.getEmaFast());
+        m.put("emaSlow", p.getEmaSlow());
+        m.put("atrPeriod", p.getAtrPeriod());
+        m.put("atrStopMult", p.getAtrStopMult());
+        m.put("targetRr", p.getTargetRr());
+        return m;
+    }
+
     /** 有状态运行实例。 */
     static final class EmaAtrRunner implements RuleRunner {
 

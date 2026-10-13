@@ -211,3 +211,38 @@ quanta:
       atr-period: 14
       atr-stop-mult: 1.5
       target-rr: 2.0
+  # 策略层（M9）：首批策略参数 + 回测验收门禁阈值（全部集中配置，可调）
+  strategy:
+    # 回测验收门禁（设计 §14.4 防过拟合 + P0清单 M9 门禁）
+    gate:
+      # 最小交易样本量（不足则门禁不过）
+      min-trade-count: 100
+      # 门禁点差档：该档下期望须为正（高成本档期望为正才算真 α）
+      spread-points: 30
+      slippage-points: 0
+      # 最大回撤上限（占初始权益百分比，账户级阈值）
+      max-drawdown-pct: 15.0
+      # 样本内占比（按时间切线：前 70% 为样本内 A，其余为样本外 B）
+      in-sample-ratio: 0.7
+    # 趋势策略：EMA 金叉死叉 + ADX 趋势过滤 + ATR 止损
+    # 参数为 GOLD 真实数据门禁回炉调参所得（150 天 M1，30 点差档通过，见 P0清单 M9 备注）
+    trend:
+      ema-fast: 20
+      ema-slow: 50
+      adx-period: 14
+      # ADX 过滤阈值：仅当 ADX ≥ 阈值（有趋势）才允许信号，抑制震荡期无效交易
+      adx-threshold: 30.0
+      atr-period: 14
+      atr-stop-mult: 2.5
+      target-rr: 3.0
+    # 震荡策略：RSI 超买超卖 + 布林带回归 + ATR 止损
+    # 参数为 GOLD 真实数据门禁回炉调参所得（150 天 M1，30 点差档通过，见 P0清单 M9 备注）
+    range:
+      rsi-period: 14
+      rsi-oversold: 18.0
+      rsi-overbought: 82.0
+      boll-period: 36
+      boll-k: 2.65
+      atr-period: 14
+      atr-stop-mult: 1.5
+      target-rr: 2.0

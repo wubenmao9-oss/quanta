@@ -11,6 +11,8 @@ import com.benmao.quanta.mapper.BacktestRunMapper;
 import com.benmao.quanta.mapper.BacktestTradeMapper;
 import com.benmao.quanta.mapper.MarketKlineMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +47,9 @@ public class BacktestService {
 
     /** profitFactor 无亏损单时的封顶值（DECIMAL(8,2) 无法存 Infinity）。 */
     private static final double PROFIT_FACTOR_CAP = 9999.99;
+
+    /** 参数快照序列化（线程安全，只读使用）。 */
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final BacktestProperties props;
     private final MarketKlineMapper klineMapper;
@@ -98,17 +103,19 @@ public class BacktestService {
     public BacktestReport run(RunSpec spec) {
         Resolved r = resolve(spec.symbol(), spec.timeframe(), spec.from(), spec.to());
         RuleStrategy strategy = strategyByKey(spec.strategyKey());
+        Long strategyId = resolveStrategyId(spec.strategyId());
         int spread = spec.spreadPoints() == null ? 0 : spec.spreadPoints();
         int slippage = spec.slippagePoints() == null ? props.getDefaultSlippage() : spec.slippagePoints();
         validateSpread(spread);
         validateSlippage(slippage);
-        return execute(r, strategy, spread, slippage);
+        return execute(r, strategy, spread, slippage, strategyId);
     }
 
     /** 点差/滑点多档扫描（设计 §13.4）。 */
     public TierScanResult runTiers(TierSpec spec) {
         Resolved r = resolve(spec.symbol(), spec.timeframe(), spec.from(), spec.to());
         RuleStrategy strategy = strategyByKey(spec.strategyKey());
+        Long strategyId = resolveStrategyId(spec.strategyId());
 
         List<Integer> spreads = (spec.spreads() == null || spec.spreads().isEmpty())
                 ? props.getSpreadTiers() : spec.spreads();
@@ -125,7 +132,7 @@ public class BacktestService {
         int barCount = 0;
         for (Integer spread : spreads) {
             for (Integer slippage : slippages) {
-                BacktestReport report = execute(r, strategy, spread, slippage);
+                BacktestReport report = execute(r, strategy, spread, slippage, strategyId);
                 barCount = report.barCount();
                 tiers.add(new TierScanResult.TierSummary(report.runId(), report.spreadPoints(),
                         report.slippagePoints(), report.tradeCount(), report.winRatePct(),
@@ -168,18 +175,19 @@ public class BacktestService {
 
     // ==================== 内部实现 ====================
 
-    private BacktestReport execute(Resolved r, RuleStrategy strategy, int spread, int slippage) {
+    private BacktestReport execute(Resolved r, RuleStrategy strategy, int spread, int slippage, Long strategyId) {
         List<KlineBar> bars = loadBars(r);
         ReplayEngine engine = new ReplayEngine(props, clock.getZone());
         EngineResult result = engine.run(bars, strategy.newRunner(), spread, slippage);
         Stats stats = computeStats(result);
-        BacktestRun run = persistRun(r, strategy, spread, slippage, stats);
+        BacktestRun run = persistRun(r, strategy, spread, slippage, stats, strategyId);
         persistTrades(run.getId(), result.trades());
         log.info("回测完成：runId={}, strategy={}, symbol={}, timeframe={}, spread={}, slippage={}, "
                         + "bars={}, trades={}, winRate={}%, pf={}, net={}",
                 run.getId(), strategy.key(), r.symbol(), r.timeframe(), spread, slippage,
                 bars.size(), stats.tradeCount(), stats.winRatePct(), stats.profitFactor(), stats.netProfit());
-        return new BacktestReport(run.getId(), strategy.key(), strategy.displayName(), r.symbol(), r.timeframe(),
+        String name = strategyId != null ? strategyName(strategyId) : strategy.displayName();
+        return new BacktestReport(run.getId(), strategy.key(), name, r.symbol(), r.timeframe(),
                 r.from(), r.to(), bars.size(), run.getSpreadMode(), spread, slippage, props.isSwapOn(),
                 stats.tradeCount(), stats.winRatePct(), stats.profitFactor(), stats.maxDrawdown(),
                 stats.avgHoldSec(), stats.expectancy(), stats.grossProfit(), stats.grossLoss(),
@@ -238,9 +246,10 @@ public class BacktestService {
                 round2(grossProfit), round2(grossLoss), round2(net));
     }
 
-    private BacktestRun persistRun(Resolved r, RuleStrategy strategy, int spread, int slippage, Stats stats) {
+    private BacktestRun persistRun(Resolved r, RuleStrategy strategy, int spread, int slippage, Stats stats,
+                                   Long strategyId) {
         BacktestRun run = new BacktestRun();
-        run.setStrategyId(ensureBuiltInStrategy(strategy));
+        run.setStrategyId(strategyId != null ? strategyId : ensureBuiltInStrategy(strategy));
         run.setSymbol(r.symbol());
         run.setDataTimeframe(r.timeframe());
         run.setStartTime(r.from());
@@ -385,18 +394,29 @@ public class BacktestService {
     }
 
     private String paramsJson(RuleStrategy strategy, int spread, int slippage) {
-        BacktestProperties.Strategy p = props.getStrategy();
-        return "{\"strategyKey\":\"" + strategy.key() + "\""
-                + ",\"emaFast\":" + p.getEmaFast()
-                + ",\"emaSlow\":" + p.getEmaSlow()
-                + ",\"atrPeriod\":" + p.getAtrPeriod()
-                + ",\"atrStopMult\":" + p.getAtrStopMult()
-                + ",\"targetRr\":" + p.getTargetRr()
-                + ",\"volume\":" + props.getVolume()
-                + ",\"spread\":" + spread
-                + ",\"slippage\":" + slippage
-                + ",\"spreadSideFactor\":" + props.getSpreadSideFactor()
-                + "}";
+        Map<String, Object> m = new LinkedHashMap<>(strategy.indicatorParams());
+        m.put("strategyKey", strategy.key());
+        m.put("volume", props.getVolume());
+        m.put("spread", spread);
+        m.put("slippage", slippage);
+        m.put("spreadSideFactor", props.getSpreadSideFactor());
+        try {
+            return MAPPER.writeValueAsString(m);
+        } catch (JsonProcessingException e) {
+            throw new BizException(ResultCode.SYSTEM_ERROR.code(), "策略参数序列化失败：" + strategy.key(), 500);
+        }
+    }
+
+    /** 校验并回显入参策略 id（关联真实策略行，供 M9 门禁留痕）；为空则不关联（回测落库用内置规则行）。 */
+    private Long resolveStrategyId(Long strategyId) {
+        if (strategyId == null) {
+            return null;
+        }
+        Strategy s = strategyMapper.getById(strategyId);
+        if (s == null) {
+            throw new BizException(ResultCode.PARAM_ERROR.code(), "策略不存在：id=" + strategyId, 404);
+        }
+        return strategyId;
     }
 
     private static double d(BigDecimal v) {
@@ -420,7 +440,14 @@ public class BacktestService {
                           String to,
                           Integer spreadPoints,
                           Integer slippagePoints,
-                          String strategyKey) {
+                          String strategyKey,
+                          Long strategyId) {
+
+        /** 兼容构造：不关联真实策略行（回测落库改用内置规则行）。 */
+        public RunSpec(String symbol, String timeframe, String from, String to,
+                       Integer spreadPoints, Integer slippagePoints, String strategyKey) {
+            this(symbol, timeframe, from, to, spreadPoints, slippagePoints, strategyKey, null);
+        }
     }
 
     /** 多档扫描入参。 */
@@ -430,7 +457,14 @@ public class BacktestService {
                            String to,
                            String strategyKey,
                            List<Integer> spreads,
-                           List<Integer> slippages) {
+                           List<Integer> slippages,
+                           Long strategyId) {
+
+        /** 兼容构造：不关联真实策略行。 */
+        public TierSpec(String symbol, String timeframe, String from, String to,
+                        String strategyKey, List<Integer> spreads, List<Integer> slippages) {
+            this(symbol, timeframe, from, to, strategyKey, spreads, slippages, null);
+        }
     }
 
     /** 可用策略视图。 */

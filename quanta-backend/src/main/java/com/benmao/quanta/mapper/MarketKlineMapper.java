@@ -69,4 +69,14 @@ public interface MarketKlineMapper {
                     @Param("timeframe") String timeframe,
                     @Param("from") LocalDateTime from,
                     @Param("to") LocalDateTime to);
+
+    // ==================== M9 策略门禁新增：探测已有 K 线的时间范围 ====================
+
+    /** 已有 K 线的最早 bar_time（无数据返回 null）；门禁未显式给区间时用于自动定位。 */
+    @Select("SELECT MIN(bar_time) FROM market_kline WHERE symbol = #{symbol} AND timeframe = #{timeframe}")
+    LocalDateTime minBarTime(@Param("symbol") String symbol, @Param("timeframe") String timeframe);
+
+    /** 已有 K 线的最晚 bar_time（无数据返回 null）。 */
+    @Select("SELECT MAX(bar_time) FROM market_kline WHERE symbol = #{symbol} AND timeframe = #{timeframe}")
+    LocalDateTime maxBarTime(@Param("symbol") String symbol, @Param("timeframe") String timeframe);
 }

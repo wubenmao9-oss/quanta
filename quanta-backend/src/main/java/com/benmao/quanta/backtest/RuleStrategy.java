@@ -1,5 +1,7 @@
 package com.benmao.quanta.backtest;
 
+import java.util.Map;
+
 /**
  * 规则策略（RULE 模式）：把策略中<b>可量化部分</b>用规则实现，回测与实盘共用（设计 §13.2）。
  *
@@ -16,4 +18,13 @@ public interface RuleStrategy {
 
     /** 为一次回测创建独立运行实例。 */
     RuleRunner newRunner();
+
+    /**
+     * 策略的指标参数快照（用于回测落库 params / strategy.indicator_params）。
+     *
+     * <p>各策略按自身参数集中配置返回，便于留痕与复现；默认空。
+     */
+    default Map<String, Object> indicatorParams() {
+        return Map.of();
+    }
 }
