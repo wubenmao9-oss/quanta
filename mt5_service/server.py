@@ -157,8 +157,42 @@ def balance_now() -> float:
     return acc.balance if acc else 0.0
 
 
+_server_offset_cache: Optional[int] = None
+
+
+def server_utc_offset_seconds() -> int:
+    """券商服务器时间 − 真实 UTC 的偏移（秒），按整小时对齐（FxPro 实测 +3h）。
+
+    背景（时区坑）：MetaTrader5 返回的成交/K 线/持仓时间戳都是**服务器时间**，
+    而 ``history_deals_get`` / ``copy_rates_range`` 接收的**朴素 datetime** 会被
+    Python 绑定按**本机本地时区**换算成 epoch。两者叠加会让查询窗口整体偏移
+    （本项目实测偏移一个时区，导致"最近若干小时的成交查不到"）。
+    因此区间查询必须显式校正：用「真实 UTC epoch + 本偏移」再换算后交给 MT5。
+    """
+    global _server_offset_cache
+    if _server_offset_cache is not None:
+        return _server_offset_cache
+    try:
+        rates = mt5.copy_rates_from_pos(DEFAULT_SYMBOL, mt5.TIMEFRAME_M1, 0, 1)
+        if rates is not None and len(rates) > 0:
+            off = int(round((int(rates[0]["time"]) - time.time()) / 3600.0)) * 3600
+            _server_offset_cache = off
+            return off
+    except Exception:
+        pass
+    return 0  # 未就绪时返回 0，不缓存（下次再探测）
+
+
+def _mt5_dt(epoch: int) -> datetime:
+    """服务器域 epoch → MT5 接口所需的朴素 datetime（经本机本地时区可无损往返）。"""
+    return datetime.fromtimestamp(epoch)
+
+
 def ts_to_iso(ts: Optional[int]) -> Optional[str]:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+    """服务器时间戳 → 真实 UTC 的 ISO8601 字符串。"""
+    if not ts:
+        return None
+    return datetime.fromtimestamp(ts - server_utc_offset_seconds(), tz=timezone.utc).isoformat()
 
 
 # ======================================================================
@@ -227,8 +261,31 @@ def _close_position(symbol: str, ticket: int) -> dict:
     }
     formatted = format_result(mt5.order_send(request), request)
     formatted["closed_ticket"] = ticket
-    formatted["profit"] = round(p.profit, 2)
+    # 取「已实现盈亏」：优先用平仓成交 deal（history_deals），而非平仓前的持仓浮盈快照——
+    # 快照与成交之间价格微动会使 p.profit 与真实成交盈亏不同（对账会报 PROFIT_MISMATCH）。
+    realized = _last_out_deal(ticket)
+    if realized is not None:
+        formatted["profit"] = round(realized.profit, 2)
+        formatted["swap"] = round(realized.swap, 2)
+        formatted["commission"] = round(realized.commission, 2)
+    else:
+        formatted["profit"] = round(p.profit, 2)
+        formatted["swap"] = round(p.swap, 2)
     return formatted
+
+
+def _last_out_deal(position_ticket: int):
+    """取该持仓的最后一笔平仓成交（entry=OUT）；成交回报可能有极短延迟，做有界重试。"""
+    for _ in range(3):
+        try:
+            deals = mt5.history_deals_get(position=position_ticket)
+        except Exception:
+            deals = None
+        outs = [d for d in (deals or []) if d.entry == mt5.DEAL_ENTRY_OUT]
+        if outs:
+            return outs[-1]
+        time.sleep(0.2)
+    return None
 
 
 def _close_all(symbol: str = "") -> list[dict]:
@@ -434,8 +491,9 @@ def klines_range(symbol: str = Query(DEFAULT_SYMBOL), timeframe: str = Query("M1
         raise HTTPException(400, f"不支持的周期: {timeframe}，可选 {list(TIMEFRAMES)}")
     ensure_connected()
     ensure_symbol(symbol)
-    date_from = datetime.fromtimestamp(from_ts, timezone.utc).replace(tzinfo=None)
-    date_to = datetime.fromtimestamp(to_ts, timezone.utc).replace(tzinfo=None)
+    off = server_utc_offset_seconds()          # 校正服务器时间偏移，见 server_utc_offset_seconds 说明
+    date_from = _mt5_dt(from_ts + off)
+    date_to = _mt5_dt(to_ts + off)
     return _rates_to_json(mt5.copy_rates_range(symbol, tf, date_from, date_to))
 
 
@@ -464,8 +522,9 @@ def history_deals(from_ts: int = Query(...), to_ts: int = Query(...), symbol: st
     if to_ts <= from_ts:
         raise HTTPException(400, "to_ts 必须大于 from_ts")
     ensure_connected()
-    date_from = datetime.fromtimestamp(from_ts, timezone.utc).replace(tzinfo=None)
-    date_to = datetime.fromtimestamp(to_ts, timezone.utc).replace(tzinfo=None)
+    off = server_utc_offset_seconds()          # 校正服务器时间偏移，见 server_utc_offset_seconds 说明
+    date_from = _mt5_dt(from_ts + off)
+    date_to = _mt5_dt(to_ts + off)
     deals = mt5.history_deals_get(date_from, date_to)
     if not deals:
         return []

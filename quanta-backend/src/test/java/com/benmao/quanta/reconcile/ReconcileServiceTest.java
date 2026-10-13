@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -167,6 +168,40 @@ class ReconcileServiceTest {
 
         assertTrue(report.diffs().stream()
                 .anyMatch(d -> d.type().equals("LOCAL_WITHOUT_MT5_DEAL") && d.ticket() == 9999L));
+    }
+
+    // ==================== 告警去重（同一差异只报一次） ====================
+
+    @Test
+    @DisplayName("对账：同一差异只告警一次（重复对账不再报）")
+    void reconcileAlertsOnlyOncePerDiff() {
+        when(bridge.historyDeals(anyLong(), anyLong())).thenReturn(List.of(deal(7001L, 5.0)));
+        TradeOrder local = closedOrder(7001L, "3.00");
+        when(tradeOrderMapper.findLatestByTicket(7001L)).thenReturn(local);
+        when(tradeOrderMapper.listAll()).thenReturn(List.of(local));
+
+        service.reconcile();   // 首次：PROFIT_MISMATCH(7001) 为新差异 → 告警
+        service.reconcile();   // 再次：同一差异 → 不再告警
+        service.reconcile();
+
+        verify(alertService, times(1)).reconcileDiff(anyString());
+    }
+
+    @Test
+    @DisplayName("对账：旧差异仍在、又出现新差异 → 只对新差异再告警一次")
+    void reconcileAlertsAgainOnlyForNewlyAppearingDiff() {
+        when(bridge.historyDeals(anyLong(), anyLong())).thenReturn(List.of(deal(7001L, 5.0)));
+        TradeOrder local = closedOrder(7001L, "3.00");
+        when(tradeOrderMapper.findLatestByTicket(7001L)).thenReturn(local);
+        when(tradeOrderMapper.listAll()).thenReturn(List.of(local));
+        service.reconcile();   // 首次：7001 盈亏不符
+
+        // 第二次：7001 仍不符 + 新增 8888（MT5 有成交、本地无流水）
+        when(bridge.historyDeals(anyLong(), anyLong())).thenReturn(List.of(deal(7001L, 5.0), deal(8888L, 1.0)));
+        when(tradeOrderMapper.findLatestByTicket(8888L)).thenReturn(null);
+        service.reconcile();
+
+        verify(alertService, times(2)).reconcileDiff(anyString());
     }
 
     // ==================== 辅助 ====================

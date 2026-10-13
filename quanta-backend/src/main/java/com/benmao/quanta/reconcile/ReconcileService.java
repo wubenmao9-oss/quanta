@@ -24,9 +24,12 @@ import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 对账与断线恢复（M13，设计 §17）。
@@ -56,6 +59,9 @@ public class ReconcileService {
     private final AlertService alertService;
     private final ReconcileProperties props;
     private final Clock clock;
+
+    /** 已告警过的差异键（{@code type#ticket}）：同一差异只报一次，仅出现**新差异**时才再报。 */
+    private final Set<String> notifiedDiffKeys = ConcurrentHashMap.newKeySet();
 
     @Autowired
     public ReconcileService(Mt5BridgeService bridge,
@@ -192,13 +198,32 @@ public class ReconcileService {
         }
 
         if (!diffs.isEmpty()) {
-            String summary = summarize(diffs);
-            auditService.write(props.getAuditOperator(), "RECONCILE_DIFF", "mt5Deals=" + deals.size(),
-                    null, summary, null);
-            if (props.isNotifyOnDiff()) {
-                alertService.reconcileDiff(summary);
+            Set<String> current = new LinkedHashSet<>();
+            for (Diff d : diffs) {
+                current.add(d.type() + "#" + d.ticket());
             }
-            log.warn("对账发现 {} 处差异：{}", diffs.size(), summary);
+            Set<String> fresh = new LinkedHashSet<>(current);
+            fresh.removeAll(notifiedDiffKeys);
+            notifiedDiffKeys.retainAll(current);   // 已消失的差异移出，日后重现时可再报
+            notifiedDiffKeys.addAll(current);
+
+            if (fresh.isEmpty()) {
+                log.debug("对账差异与上次一致（{} 处），不再重复告警", diffs.size());
+            } else {
+                List<Diff> freshDiffs = new ArrayList<>();
+                for (Diff d : diffs) {
+                    if (fresh.contains(d.type() + "#" + d.ticket())) {
+                        freshDiffs.add(d);
+                    }
+                }
+                String summary = summarize(freshDiffs);
+                auditService.write(props.getAuditOperator(), "RECONCILE_DIFF",
+                        "mt5Deals=" + deals.size() + " newDiffs=" + freshDiffs.size(), null, summary, null);
+                if (props.isNotifyOnDiff()) {
+                    alertService.reconcileDiff(summary);
+                }
+                log.warn("对账发现差异（总 {} 处，新增 {} 处）：{}", diffs.size(), freshDiffs.size(), summary);
+            }
         }
         return new ReconcileReport(from, to, deals.size(), diffs);
     }
