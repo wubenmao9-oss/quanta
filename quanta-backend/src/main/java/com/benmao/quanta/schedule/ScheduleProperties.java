@@ -3,7 +3,9 @@ package com.benmao.quanta.schedule;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -166,6 +168,8 @@ public class ScheduleProperties {
 
         private IndicatorRule indicator = new IndicatorRule();
 
+        private AutoWake autoWake = new AutoWake();
+
         /**
          * 某触发源是否启用。显式配置优先；否则「必做」源（T1/T2/T5/T6/T7）默认开，
          * 插件源（T3/T4）与二期源（T8）默认关。
@@ -230,6 +234,62 @@ public class ScheduleProperties {
 
         public void setIndicator(IndicatorRule indicator) {
             this.indicator = indicator;
+        }
+
+        public AutoWake getAutoWake() {
+            return autoWake;
+        }
+
+        public void setAutoWake(AutoWake autoWake) {
+            this.autoWake = autoWake;
+        }
+    }
+
+    /**
+     * 触发命中后自动唤醒 AI 研判（M14，设计 §5「触发 → 唤醒会话研判」）。
+     *
+     * <p><b>默认关闭</b>：关闭时触发命中只分配会话、不唤醒 AI，保持一期「盯盘 0 token」；
+     * 开启后（非降级、非 TAKEOVER、命中源在白名单内）由调度层异步回调
+     * {@link TriggerWakeHandler}（实际实现 {@code AgentTriggerWakeHandler} → {@code AgentService}）。
+     */
+    public static class AutoWake {
+
+        /** 总开关（默认关）。 */
+        private boolean enabled = false;
+
+        /** 最小唤醒间隔（秒），对频繁命中的触发做风暴节流；0 = 不节流。 */
+        private long minIntervalSeconds = 60;
+
+        /** 允许自动唤醒的触发源白名单（默认仅行情/持仓类 T1/T2/T5）。 */
+        private List<String> sources = new ArrayList<>(List.of("T1", "T2", "T5"));
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public long getMinIntervalSeconds() {
+            return minIntervalSeconds;
+        }
+
+        public void setMinIntervalSeconds(long minIntervalSeconds) {
+            this.minIntervalSeconds = minIntervalSeconds;
+        }
+
+        public List<String> getSources() {
+            return sources;
+        }
+
+        public void setSources(List<String> sources) {
+            this.sources = (sources == null) ? new ArrayList<>() : sources;
+        }
+
+        /** 该触发源是否在自动唤醒白名单内。 */
+        public boolean allows(TriggerSource source) {
+            return source != null && sources != null && sources.contains(source.name());
         }
     }
 

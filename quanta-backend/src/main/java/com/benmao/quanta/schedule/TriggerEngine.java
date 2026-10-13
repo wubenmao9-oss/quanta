@@ -7,6 +7,7 @@ import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
 import com.benmao.quanta.ops.AlertService;
+import com.benmao.quanta.state.RunMode;
 import com.benmao.quanta.state.SystemStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PreDestroy;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -24,12 +26,17 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 触发引擎：判断「何时唤醒 AI」。命中一个触发源即产出 {@link TriggerHit} 并交由 {@link SessionManager} 分配会话。
  *
- * <p><b>省 Token 的关键</b>：本类只做廉价判定，<b>不持有也不调用任何 LLM</b>；命中后是否真正发起 AI 研判属于 M10，
- * 一期到此为止（因此盯盘 + 触发全程 0 token）。
+ * <p><b>省 Token 的关键</b>：本类只做廉价判定，<b>不持有也不调用任何 LLM</b>；命中后是否真正发起 AI 研判，
+ * 由 {@code quanta.schedule.trigger.auto-wake.*} 开关决定（M14）——关闭时（默认）命中只分配会话、不唤醒 AI
+ * （一期「盯盘 0 token」）；开启时经 {@link TriggerWakeHandler} 扩展点异步回调（实现位于 agent 包），
+ * 因此本类对 LLM 的引用仍为零（见 {@code ScheduleNoLlmDependencyTest}）。
  *
  * <p>触发源（设计 §6.2）：T1/T2/T5/T6/T7 为内建，T3/T4 为插件（{@link TriggerRule}）。每个触发源都有独立开关，
  * 由 {@link ScheduleProperties.Trigger#enabled(TriggerSource)} 控制。
@@ -58,6 +65,8 @@ public class TriggerEngine {
     private final List<TriggerRule> rules;
     private final SystemStateService stateService;
     private final AlertService alertService;
+    private final List<TriggerWakeHandler> wakeHandlers;
+    private final Executor wakeExecutor;
     private final Clock clock;
 
     /** 上次时间驱动触发时刻（T2）。 */
@@ -66,6 +75,8 @@ public class TriggerEngine {
     private volatile LocalDateTime lastBarTime;
     /** 上次连接状态（T7 断线恢复判定用；null = 尚未观测）。 */
     private volatile Boolean lastConnected;
+    /** 上次自动唤醒时刻（M14 风暴节流）。 */
+    private volatile Instant lastAutoWakeAt;
 
     /** 人工唤醒（T6）待下次扫描处理。 */
     private final ConcurrentLinkedQueue<TriggerHit> pendingManual = new ConcurrentLinkedQueue<>();
@@ -80,12 +91,13 @@ public class TriggerEngine {
                          ScheduleProperties props,
                          List<TriggerRule> rules,
                          SystemStateService stateService,
-                         AlertService alertService) {
+                         AlertService alertService,
+                         List<TriggerWakeHandler> wakeHandlers) {
         this(watcher, bridge, tradePlanMapper, sessionManager, props, rules, stateService, alertService,
-                Clock.systemDefaultZone());
+                wakeHandlers, newWakeExecutor(), Clock.systemDefaultZone());
     }
 
-    /** 测试用：可注入固定时钟。 */
+    /** 测试用：可注入固定时钟与唤醒执行器。 */
     TriggerEngine(MarketWatcher watcher,
                   Mt5BridgeService bridge,
                   TradePlanMapper tradePlanMapper,
@@ -94,6 +106,8 @@ public class TriggerEngine {
                   List<TriggerRule> rules,
                   SystemStateService stateService,
                   AlertService alertService,
+                  List<TriggerWakeHandler> wakeHandlers,
+                  Executor wakeExecutor,
                   Clock clock) {
         this.watcher = watcher;
         this.bridge = bridge;
@@ -105,7 +119,26 @@ public class TriggerEngine {
                         .thenComparing(TriggerRule::name)).toList();
         this.stateService = stateService;
         this.alertService = alertService;
+        this.wakeHandlers = wakeHandlers == null ? List.of() : List.copyOf(wakeHandlers);
+        this.wakeExecutor = wakeExecutor;
         this.clock = clock;
+    }
+
+    /** 自动唤醒专用单线程执行器（守护线程）：避免 LLM 调用阻塞 @Scheduled 扫描线程。 */
+    private static Executor newWakeExecutor() {
+        return Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "trigger-auto-wake");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    /** 容器关闭时释放唤醒执行器。 */
+    @PreDestroy
+    void shutdownWakeExecutor() {
+        if (wakeExecutor instanceof ExecutorService es) {
+            es.shutdown();
+        }
     }
 
     /** 定时扫描（间隔由 {@code quanta.schedule.trigger.scan-interval-ms} 决定）。 */
@@ -291,8 +324,63 @@ public class TriggerEngine {
             SessionManager.AcquireResult result = sessionManager.acquire(hit.source(), hit.symbol(), hit.ticket(), null);
             log.info("触发命中 [{}] {} | {} | 会话分配：{}",
                     hit.source(), hit.symbol(), hit.reason(), describe(result));
+            if (result.status() != SessionManager.AcquireStatus.QUEUED) {
+                autoWake(hit);
+            }
         } catch (RuntimeException e) {
             log.error("触发命中后分配会话失败（{}）：{}", hit.source(), e.getMessage());
+        }
+    }
+
+    /**
+     * 自动唤醒 AI 研判（M14）：命中源在白名单、自动唤醒开关打开、非降级、非 TAKEOVER 时，
+     * 经 {@link TriggerWakeHandler} 扩展点在<b>专用线程</b>上异步发起一次研判（避免阻塞扫描线程）。
+     *
+     * <p>节流：{@code auto-wake.min-interval-seconds} 内只唤醒一次，抑制命中风暴。
+     * 读取运行模式失败时按「跳过」处理（fail-closed：宁可不唤醒，绝不误唤醒）。
+     */
+    private void autoWake(TriggerHit hit) {
+        ScheduleProperties.AutoWake cfg = props.getTrigger().getAutoWake();
+        if (!cfg.isEnabled() || wakeHandlers.isEmpty() || wakeExecutor == null) {
+            return;
+        }
+        if (!cfg.allows(hit.source())) {
+            return;
+        }
+        if (!autoWakeAllowedMode()) {
+            return;
+        }
+        Instant now = clock.instant();
+        Instant last = lastAutoWakeAt;
+        if (last != null && cfg.getMinIntervalSeconds() > 0
+                && now.isBefore(last.plusSeconds(cfg.getMinIntervalSeconds()))) {
+            return;
+        }
+        lastAutoWakeAt = now;
+        for (TriggerWakeHandler handler : wakeHandlers) {
+            try {
+                wakeExecutor.execute(() -> safeWake(handler, hit));
+            } catch (RuntimeException e) {
+                log.warn("提交自动唤醒任务失败（{}）：{}", hit.source(), e.getMessage());
+            }
+        }
+    }
+
+    private static void safeWake(TriggerWakeHandler handler, TriggerHit hit) {
+        try {
+            handler.onTrigger(hit);
+        } catch (RuntimeException e) {
+            log.warn("自动唤醒处理异常（{}）：{}", hit.source(), e.getMessage());
+        }
+    }
+
+    /** 自动唤醒仅在非 TAKEOVER（人工接管，AI 只出建议）时进行；读取失败按不允许处理。 */
+    private boolean autoWakeAllowedMode() {
+        try {
+            return stateService.runMode() != RunMode.TAKEOVER;
+        } catch (RuntimeException e) {
+            log.warn("读取运行模式失败，自动唤醒按跳过处理：{}", e.getMessage());
+            return false;
         }
     }
 

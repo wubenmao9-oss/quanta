@@ -220,6 +220,14 @@ quanta:
       indicator:
         rsi-overbought: 70.0
         rsi-oversold: 30.0
+      # 命中后自动唤醒 AI 研判（M14，设计 §5「触发 → 唤醒会话研判」；默认关，保持盯盘 0 token）
+      auto-wake:
+        # 总开关：开启后命中（白名单源、非降级、非 TAKEOVER）自动发起一次 Agent 研判
+        enabled: ${QUANTA_AUTO_WAKE_ENABLED:false}
+        # 最小唤醒间隔（秒）：对频繁命中做风暴节流；0 = 不节流
+        min-interval-seconds: 60
+        # 允许自动唤醒的触发源白名单（默认仅行情/持仓类）
+        sources: [T1, T2, T5]
   # Token 预算与降级（M12，设计 §8.4）：按日聚合比较 / 超限降级 / 次日或人工恢复（全部集中配置）
   budget:
     # 总开关：关闭后不再自动检查与降级

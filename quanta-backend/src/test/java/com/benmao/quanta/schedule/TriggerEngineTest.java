@@ -7,6 +7,7 @@ import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
 import com.benmao.quanta.ops.AlertService;
+import com.benmao.quanta.state.RunMode;
 import com.benmao.quanta.state.SystemStateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -64,6 +65,7 @@ class TriggerEngineTest {
         when(watcher.snapshot()).thenReturn(snapshot());
         when(bridge.positions(anyString())).thenReturn(List.of());
         when(stateService.isDegraded()).thenReturn(false);
+        when(stateService.runMode()).thenReturn(RunMode.AUTO);
         when(sessionManager.acquire(any(), any(), any(), any())).thenReturn(new SessionManager.AcquireResult(
                 SessionManager.AcquireStatus.ACQUIRED,
                 new SessionManager.Lease(1, "GOLD", null, TriggerSource.T1, false), 0));
@@ -240,11 +242,85 @@ class TriggerEngineTest {
         assertTrue(hasHit(engine, TriggerSource.T7));
     }
 
+    // ==================== 命中后自动唤醒 AI（M14） ====================
+
+    @Test
+    @DisplayName("自动唤醒默认关闭：命中只分配会话，不回调唤醒处理器")
+    void autoWakeDisabledByDefault() {
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(7L, "4200")));
+
+        engine(List.of(), List.of(handler)).scan();
+
+        verify(sessionManager).acquire(eq(TriggerSource.T1), eq("GOLD"), isNull(), isNull());
+        verify(handler, never()).onTrigger(any());
+    }
+
+    @Test
+    @DisplayName("自动唤醒开启：命中后回调唤醒处理器一次（异步执行器同步注入）")
+    void autoWakeInvokesHandlerWhenEnabled() {
+        props.getTrigger().getAutoWake().setEnabled(true);
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(7L, "4200")));
+
+        engine(List.of(), List.of(handler)).scan();
+
+        verify(handler).onTrigger(any(TriggerHit.class));
+    }
+
+    @Test
+    @DisplayName("自动唤醒受触发源白名单限制：非白名单源命中不唤醒")
+    void autoWakeRespectsSourceWhitelist() {
+        props.getTrigger().getAutoWake().setEnabled(true);
+        props.getTrigger().getAutoWake().setSources(new java.util.ArrayList<>(List.of("T2")));
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(7L, "4200")));
+
+        engine(List.of(), List.of(handler)).scan();   // 仅 T1 命中（T2 已关）
+
+        verify(handler, never()).onTrigger(any());
+    }
+
+    @Test
+    @DisplayName("自动唤醒按最小间隔节流：间隔内多次命中只唤醒一次")
+    void autoWakeThrottledWithinInterval() {
+        props.getTrigger().getAutoWake().setEnabled(true);
+        props.getTrigger().getAutoWake().setSources(new java.util.ArrayList<>(List.of("T1", "T2")));
+        props.getTrigger().getTime().setIntervalSeconds(1);
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(7L, "4200")));
+
+        TriggerEngine engine = engine(List.of(), List.of(handler));
+        engine.scan();                              // T1 + T2 命中 → 仅唤醒一次
+        verify(handler, times(1)).onTrigger(any());
+
+        clock.advance(Duration.ofSeconds(61));      // 超过最小间隔（默认 60s）
+        engine.scan();                              // 再次命中 → 再唤醒一次
+        verify(handler, times(2)).onTrigger(any());
+    }
+
+    @Test
+    @DisplayName("TAKEOVER（人工接管）下不自动唤醒")
+    void autoWakeSkippedInTakeover() {
+        props.getTrigger().getAutoWake().setEnabled(true);
+        when(stateService.runMode()).thenReturn(RunMode.TAKEOVER);
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(7L, "4200")));
+
+        engine(List.of(), List.of(handler)).scan();
+
+        verify(handler, never()).onTrigger(any());
+    }
+
     // ==================== 辅助 ====================
 
     private TriggerEngine engine(List<TriggerRule> rules) {
+        return engine(rules, List.of());
+    }
+
+    private TriggerEngine engine(List<TriggerRule> rules, List<TriggerWakeHandler> handlers) {
         return new TriggerEngine(watcher, bridge, tradePlanMapper, sessionManager, props, rules,
-                stateService, alertService, clock);
+                stateService, alertService, handlers, Runnable::run, clock);
     }
 
     private boolean hasHit(TriggerEngine engine, TriggerSource source) {
