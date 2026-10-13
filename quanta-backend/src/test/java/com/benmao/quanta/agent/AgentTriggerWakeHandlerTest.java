@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,7 +23,8 @@ import static org.mockito.Mockito.when;
 class AgentTriggerWakeHandlerTest {
 
     private final AgentService agentService = mock(AgentService.class);
-    private final AgentTriggerWakeHandler handler = new AgentTriggerWakeHandler(agentService);
+    private final AgentSessionService sessionService = mock(AgentSessionService.class);
+    private final AgentTriggerWakeHandler handler = new AgentTriggerWakeHandler(agentService, sessionService);
 
     @Test
     @DisplayName("触发命中映射为 AgentDecideRequest：triggerType=源名、reason=命中原因、symbol=命中品种")
@@ -54,6 +56,28 @@ class AgentTriggerWakeHandlerTest {
         TriggerHit hit = new TriggerHit(TriggerSource.T5, "GOLD", "浮盈达阈值", null, 7001L, null, Instant.now());
 
         assertDoesNotThrow(() -> handler.onTrigger(hit));
+    }
+
+    @Test
+    @DisplayName("研判结束后关闭自动唤醒会话（短生命周期研判窗口，避免 ACTIVE 累积）")
+    void closesSessionAfterDecision() {
+        when(agentService.decide(any())).thenReturn(result());
+        TriggerHit hit = new TriggerHit(TriggerSource.T2, "GOLD", "时间驱动", null, null, null, Instant.now());
+
+        handler.onTrigger(hit);
+
+        verify(sessionService).close(1L);
+    }
+
+    @Test
+    @DisplayName("研判失败（无会话 id）不调用关闭，且异常不外抛")
+    void doesNotCloseWhenNoSession() {
+        when(agentService.decide(any())).thenThrow(new RuntimeException("LLM 不可用"));
+        TriggerHit hit = new TriggerHit(TriggerSource.T2, "GOLD", "时间驱动", null, null, null, Instant.now());
+
+        handler.onTrigger(hit);
+
+        verify(sessionService, never()).close(any());
     }
 
     private static AgentDecideResult result() {

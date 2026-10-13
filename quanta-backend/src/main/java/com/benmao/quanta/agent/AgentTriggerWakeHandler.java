@@ -23,9 +23,11 @@ public class AgentTriggerWakeHandler implements TriggerWakeHandler {
     private static final Logger log = LoggerFactory.getLogger(AgentTriggerWakeHandler.class);
 
     private final AgentService agentService;
+    private final AgentSessionService sessionService;
 
-    public AgentTriggerWakeHandler(AgentService agentService) {
+    public AgentTriggerWakeHandler(AgentService agentService, AgentSessionService sessionService) {
         this.agentService = agentService;
+        this.sessionService = sessionService;
     }
 
     @Override
@@ -33,14 +35,33 @@ public class AgentTriggerWakeHandler implements TriggerWakeHandler {
         if (hit == null) {
             return;
         }
+        Long sessionId = null;
         try {
             AgentDecideRequest req = new AgentDecideRequest(
                     hit.symbol(), null, null, null, hit.source().name(), hit.reason());
             AgentDecideResult r = agentService.decide(req);
+            sessionId = r.sessionId();
             log.info("自动唤醒完成：触发={} 会话={} 动作={} 置信度={} 执行={} ticket={}",
                     hit.source(), r.sessionId(), r.action(), r.confidence(), r.executed(), r.ticket());
         } catch (RuntimeException e) {
             log.warn("自动唤醒 Agent 研判失败（触发={}）：{}", hit.source(), e.getMessage());
+        } finally {
+            closeSession(sessionId);
+        }
+    }
+
+    /**
+     * 自动唤醒的会话是<b>短生命周期「研判窗口」</b>：一次触发一次研判，结束即关闭，
+     * 避免 ACTIVE 会话随每次唤醒无限累积（M14 现场：8 条会话全 ACTIVE 无一关闭）。
+     */
+    private void closeSession(Long sessionId) {
+        if (sessionId == null) {
+            return;
+        }
+        try {
+            sessionService.close(sessionId);
+        } catch (RuntimeException e) {
+            log.warn("关闭自动唤醒会话失败：session={} err={}", sessionId, e.getMessage());
         }
     }
 }

@@ -254,6 +254,7 @@ class TriggerEngineTest {
 
         verify(sessionManager).acquire(eq(TriggerSource.T1), eq("GOLD"), isNull(), isNull());
         verify(handler, never()).onTrigger(any());
+        verify(sessionManager).release(1);   // 未真正唤醒也必须归还窗口，避免窗口泄漏
     }
 
     @Test
@@ -266,6 +267,7 @@ class TriggerEngineTest {
         engine(List.of(), List.of(handler)).scan();
 
         verify(handler).onTrigger(any(TriggerHit.class));
+        verify(sessionManager).release(1);   // 研判结束后归还窗口
     }
 
     @Test
@@ -310,6 +312,29 @@ class TriggerEngineTest {
         engine(List.of(), List.of(handler)).scan();
 
         verify(handler, never()).onTrigger(any());
+    }
+
+    @Test
+    @DisplayName("回归：连续时间触发不会因会话窗口耗尽而停止唤醒（窗口用完即释放，不再泄漏）")
+    void autoWakeReleasesWindowSoItNeverStarves() {
+        props.getTrigger().getAutoWake().setEnabled(true);
+        props.getTrigger().getAutoWake().setSources(new java.util.ArrayList<>(List.of("T2")));
+        props.getTrigger().getTime().setIntervalSeconds(60);
+        TriggerWakeHandler handler = mock(TriggerWakeHandler.class);
+        SessionManager real = new SessionManager(props);   // 真实窗口管理器（max_session 默认 5）
+
+        TriggerEngine engine = new TriggerEngine(watcher, bridge, tradePlanMapper, real, props,
+                List.of(), stateService, alertService, List.of(handler), Runnable::run, clock);
+
+        // 连打 8 轮（> max_session=5）：修复前第 6 轮起窗口占满 → 命中被排队丢弃，唤醒停在 5 次
+        for (int i = 0; i < 8; i++) {
+            clock.advance(Duration.ofSeconds(61));
+            engine.scan();
+        }
+
+        verify(handler, times(8)).onTrigger(any(TriggerHit.class));
+        assertEquals(0, real.activeCount(), "每次唤醒结束都应归还窗口，活跃窗口不应累积");
+        assertEquals(0, real.queuedCount(), "不应有触发被永久排队");
     }
 
     // ==================== 辅助 ====================

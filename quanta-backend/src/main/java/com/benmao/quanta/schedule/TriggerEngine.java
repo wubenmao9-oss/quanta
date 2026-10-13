@@ -324,9 +324,10 @@ public class TriggerEngine {
             SessionManager.AcquireResult result = sessionManager.acquire(hit.source(), hit.symbol(), hit.ticket(), null);
             log.info("触发命中 [{}] {} | {} | 会话分配：{}",
                     hit.source(), hit.symbol(), hit.reason(), describe(result));
-            if (result.status() != SessionManager.AcquireStatus.QUEUED) {
-                autoWake(hit);
+            if (result.status() == SessionManager.AcquireStatus.QUEUED) {
+                return;
             }
+            autoWake(hit, result.lease().sessionNo());
         } catch (RuntimeException e) {
             log.error("触发命中后分配会话失败（{}）：{}", hit.source(), e.getMessage());
         }
@@ -338,30 +339,47 @@ public class TriggerEngine {
      *
      * <p>节流：{@code auto-wake.min-interval-seconds} 内只唤醒一次，抑制命中风暴。
      * 读取运行模式失败时按「跳过」处理（fail-closed：宁可不唤醒，绝不误唤醒）。
+     *
+     * <p><b>会话窗口必须成对释放</b>：{@code dispatch} 已为本次命中申请窗口，无论是否真正发起唤醒都要归还——
+     * 研判结束（async 任务 finally）释放；未真正唤醒（开关关/白名单外/节流/接管/提交失败）立即释放。
+     * 否则窗口会被逐一占满，后续命中永久排队，自动唤醒在 {@code max_session × 间隔} 后彻底停摆。
      */
-    private void autoWake(TriggerHit hit) {
-        ScheduleProperties.AutoWake cfg = props.getTrigger().getAutoWake();
-        if (!cfg.isEnabled() || wakeHandlers.isEmpty() || wakeExecutor == null) {
-            return;
-        }
-        if (!cfg.allows(hit.source())) {
-            return;
-        }
-        if (!autoWakeAllowedMode()) {
-            return;
-        }
-        Instant now = clock.instant();
-        Instant last = lastAutoWakeAt;
-        if (last != null && cfg.getMinIntervalSeconds() > 0
-                && now.isBefore(last.plusSeconds(cfg.getMinIntervalSeconds()))) {
-            return;
-        }
-        lastAutoWakeAt = now;
-        for (TriggerWakeHandler handler : wakeHandlers) {
-            try {
-                wakeExecutor.execute(() -> safeWake(handler, hit));
-            } catch (RuntimeException e) {
-                log.warn("提交自动唤醒任务失败（{}）：{}", hit.source(), e.getMessage());
+    private void autoWake(TriggerHit hit, int sessionNo) {
+        boolean submitted = false;
+        try {
+            ScheduleProperties.AutoWake cfg = props.getTrigger().getAutoWake();
+            if (!cfg.isEnabled() || wakeHandlers.isEmpty() || wakeExecutor == null) {
+                return;
+            }
+            if (!cfg.allows(hit.source())) {
+                return;
+            }
+            if (!autoWakeAllowedMode()) {
+                return;
+            }
+            Instant now = clock.instant();
+            Instant last = lastAutoWakeAt;
+            if (last != null && cfg.getMinIntervalSeconds() > 0
+                    && now.isBefore(last.plusSeconds(cfg.getMinIntervalSeconds()))) {
+                return;
+            }
+            lastAutoWakeAt = now;
+            List<TriggerWakeHandler> handlers = this.wakeHandlers;
+            wakeExecutor.execute(() -> {
+                try {
+                    for (TriggerWakeHandler handler : handlers) {
+                        safeWake(handler, hit);
+                    }
+                } finally {
+                    sessionManager.release(sessionNo);
+                }
+            });
+            submitted = true;
+        } catch (RuntimeException e) {
+            log.warn("提交自动唤醒任务失败（{}）：{}", hit.source(), e.getMessage());
+        } finally {
+            if (!submitted) {
+                sessionManager.release(sessionNo);
             }
         }
     }
