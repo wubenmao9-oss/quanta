@@ -16,6 +16,7 @@ import java.math.BigDecimal;
  * @param ticket    持仓单号（CLOSE/MODIFY 必填）
  * @param sessionId 发起会话（R13 持仓互斥用；可空 = 人工）
  * @param traceId   追踪号（R8 幂等用）
+ * @param origin    发起来源（M13：AI 自主 / MANUAL 人工；仅影响 R11 三态判定）
  */
 public record RiskRequest(RiskAction action,
                           String symbol,
@@ -27,5 +28,12 @@ public record RiskRequest(RiskAction action,
                           String tpMode,
                           Long ticket,
                           Long sessionId,
-                          String traceId) {
+                          String traceId,
+                          RiskOrigin origin) {
+
+    /** 兼容构造：默认 {@link RiskOrigin#AI}。 */
+    public RiskRequest(RiskAction action, String symbol, RiskSide side, BigDecimal volume, BigDecimal price,
+                       BigDecimal sl, BigDecimal tp, String tpMode, Long ticket, Long sessionId, String traceId) {
+        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, traceId, RiskOrigin.AI);
+    }
 }

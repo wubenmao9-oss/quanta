@@ -1,6 +1,7 @@
 package com.benmao.mt5;
 
 import com.benmao.mt5.model.AccountInfo;
+import com.benmao.mt5.model.Deal;
 import com.benmao.mt5.model.Position;
 import com.fasterxml.jackson.core.type.TypeReference;
 
@@ -48,5 +49,12 @@ public class Mt5AccountService {
             }
         }
         return null;
+    }
+
+    /** 指定 [fromEpoch, toEpoch] 区间的成交历史（UTC epoch 秒）；对账用。 */
+    public List<Deal> historyDeals(long fromEpoch, long toEpoch) {
+        return client.getList("/history/deals?from_ts=" + fromEpoch + "&to_ts=" + toEpoch,
+                new TypeReference<List<Deal>>() {
+                });
     }
 }

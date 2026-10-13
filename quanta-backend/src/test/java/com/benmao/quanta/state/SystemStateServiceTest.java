@@ -1,5 +1,6 @@
 package com.benmao.quanta.state;
 
+import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.SysState;
 import com.benmao.quanta.mapper.SysStateMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -79,6 +81,33 @@ class SystemStateServiceTest {
         assertTrue(afterRestart.isDegraded(), "重启后应仍为降级态");
         assertEquals(LocalDate.of(2026, 10, 13), afterRestart.tokenDate());
         assertEquals(999L, afterRestart.tokenUsedToday());
+    }
+
+    // ==================== 三态运行模式（M13） ====================
+
+    @Test
+    @DisplayName("runMode：无记录或空 → AUTO")
+    void runModeDefaultsToAuto() {
+        assertEquals(RunMode.AUTO, service.runMode());
+    }
+
+    @Test
+    @DisplayName("setRunMode：切换落库且重启后仍保持；同模式幂等返回 false")
+    void setRunModePersistsAndIdempotent() {
+        assertTrue(service.setRunMode("TAKEOVER"), "首次切换应返回 true");
+        assertEquals(RunMode.TAKEOVER, service.runMode());
+
+        assertFalse(service.setRunMode("takeover"), "同模式（大小写不敏感）应幂等返回 false");
+
+        SystemStateService afterRestart = new SystemStateService(mapper);
+        assertEquals(RunMode.TAKEOVER, afterRestart.runMode(), "重启后应仍为 TAKEOVER");
+    }
+
+    @Test
+    @DisplayName("setRunMode：非法模式抛参数异常且回执合法取值")
+    void setRunModeInvalidRejected() {
+        BizException e = assertThrows(BizException.class, () -> service.setRunMode("BOGUS"));
+        assertTrue(e.getMessage().contains("AUTO / PAUSED / TAKEOVER"), e.getMessage());
     }
 
     /** 内存假 Mapper：模拟 sys_state 单行存储（insert / update / listAll）。 */

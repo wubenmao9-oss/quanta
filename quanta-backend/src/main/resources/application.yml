@@ -240,6 +240,34 @@ quanta:
       ensure-hard-tp: false
       # 补挂 HARD TP 的固定距离（points；仅 ensure-hard-tp=true 时生效）
       hard-tp-points: 300.0
+  # 运维层（M13）：三态运行模式 + 人工操作审计 + 关键事件告警（设计 §8.1 / §8.3 / §17）
+  ops:
+    # 关键事件告警总开关（熔断/断线/对账差异/孤儿认领）；关闭则只留 notify_log 与日志
+    alert-enabled: ${QUANTA_OPS_ALERT_ENABLED:true}
+    # 同类告警去抖窗口（秒）；0 = 不去抖
+    alert-cooldown-seconds: 300
+    # 告警邮件的 notify_log.notify_type
+    alert-notify-type: SYSTEM_ALERT
+    # operation_audit.operator（人工手动操作）
+    manual-audit-operator: MANUAL
+    # 人工操作是否通过 T7 系统事件通知关联会话（让 AI 更新记忆）
+    manual-notify-session: true
+  # 对账 / 断线恢复（M13）：启动认领已有持仓 + 定期用 MT5 成交历史核对 trade_order（设计 §17）
+  reconcile:
+    # 总开关：关闭后不启动认领、不做定时对账（/api/ops/reconcile 手工触发仍可用）
+    enabled: ${QUANTA_RECONCILE_ENABLED:true}
+    # 定时对账 cron（默认每 5 分钟）
+    cron: "0 */5 * * * *"
+    # 启动时是否认领已有持仓（杜绝孤儿持仓）
+    claim-on-startup: true
+    # 对账回看窗口（小时）
+    lookback-hours: 24
+    # operation_audit.operator（对账/认领留痕）
+    audit-operator: RECONCILE
+    # 盈亏核对容差（USD）
+    profit-tolerance: 0.01
+    # 发现差异时是否发告警
+    notify-on-diff: true
   # 回测层（M8）：事件驱动 M1 重放 + 点差多档扫描（设计 §13）
   backtest:
     symbol: ${QUANTA_MT5_SYMBOL:GOLD}

@@ -6,6 +6,7 @@ import com.benmao.quanta.bridge.Mt5BridgeService;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradeOrder;
 import com.benmao.quanta.mapper.TradeOrderMapper;
+import com.benmao.quanta.ops.AlertService;
 import com.benmao.quanta.risk.RiskAction;
 import com.benmao.quanta.risk.RiskDecision;
 import com.benmao.quanta.risk.RiskGuard;
@@ -50,6 +51,7 @@ class TradingServiceTest {
     private RiskGuard riskGuard;
     private TradeOrderMapper mapper;
     private ApplicationEventPublisher eventPublisher;
+    private AlertService alertService;
     private TradingService service;
 
     @BeforeEach
@@ -58,7 +60,8 @@ class TradingServiceTest {
         riskGuard = mock(RiskGuard.class);
         mapper = mock(TradeOrderMapper.class);
         eventPublisher = mock(ApplicationEventPublisher.class);
-        service = new TradingService(bridge, riskGuard, mapper, eventPublisher);
+        alertService = mock(AlertService.class);
+        service = new TradingService(bridge, riskGuard, mapper, eventPublisher, alertService);
     }
 
     // ==================== 开仓 ====================
@@ -100,6 +103,21 @@ class TradingServiceTest {
                 open(RiskSide.BUY, new BigDecimal("0.01"), null, null, "trace-reject-1")));
 
         assertTrue(ex.getMessage().contains("R5"), ex.getMessage());
+        verifyNoInteractions(bridge);
+        verify(mapper, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("R6 日亏熔断：命中即发关键事件告警，且不触达券商、不落库")
+    void openRejectedByCircuitBreakerAlerts() {
+        when(riskGuard.evaluate(any())).thenReturn(denied(RiskAction.OPEN, "R6", "DAILY_LOSS_CIRCUIT_BREAKER",
+                "当日已实现亏损达上限，只允许平仓"));
+
+        BizException ex = assertThrows(BizException.class, () -> service.openPosition(
+                open(RiskSide.BUY, new BigDecimal("0.01"), new BigDecimal("4199.00"), null, "trace-r6")));
+
+        assertTrue(ex.getMessage().contains("R6"), ex.getMessage());
+        verify(alertService).circuitBreaker(anyString());
         verifyNoInteractions(bridge);
         verify(mapper, never()).insert(any());
     }

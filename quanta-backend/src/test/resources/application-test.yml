@@ -17,3 +17,7 @@ quanta:
     # 测试环境关闭 Token 预算的定时检查/重置，避免后台任务在其它用例中产生干扰与噪声库写入；
     # M12 用例直接调用 BudgetGuard.check()/status() 验证行为。
     enabled: false
+  reconcile:
+    # 测试环境关闭启动认领与定时对账，避免真库 IT 在上下文启动时误认领真实持仓；
+    # M13 用例直接构造 ReconcileService 并调用 claimExistingPositions()/reconcile() 验证行为。
+    enabled: false

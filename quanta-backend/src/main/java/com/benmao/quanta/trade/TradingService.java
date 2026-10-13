@@ -8,7 +8,9 @@ import com.benmao.quanta.common.ResultCode;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradeOrder;
 import com.benmao.quanta.mapper.TradeOrderMapper;
+import com.benmao.quanta.ops.AlertService;
 import com.benmao.quanta.risk.RiskAction;
+import com.benmao.quanta.risk.RiskDecision;
 import com.benmao.quanta.risk.RiskGuard;
 import com.benmao.quanta.risk.RiskRequest;
 import com.benmao.quanta.risk.RiskSide;
@@ -18,6 +20,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -51,15 +55,18 @@ public class TradingService {
     private final RiskGuard riskGuard;
     private final TradeOrderMapper tradeOrderMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final AlertService alertService;
 
     public TradingService(Mt5BridgeService bridge,
                           RiskGuard riskGuard,
                           TradeOrderMapper tradeOrderMapper,
-                          ApplicationEventPublisher eventPublisher) {
+                          ApplicationEventPublisher eventPublisher,
+                          AlertService alertService) {
         this.bridge = bridge;
         this.riskGuard = riskGuard;
         this.tradeOrderMapper = tradeOrderMapper;
         this.eventPublisher = eventPublisher;
+        this.alertService = alertService;
     }
 
     // ==================== 开仓 ====================
@@ -73,7 +80,19 @@ public class TradingService {
 
         String traceId = traceIdOf(cmd);
         // 唯一入口：风控拒绝即抛，不触达券商、不落库
-        riskGuard.evaluate(toRiskRequest(cmd, traceId)).orThrow();
+        RiskDecision decision = riskGuard.evaluate(toRiskRequest(cmd, traceId));
+        if (!decision.allowed()) {
+            // R6 日亏熔断：关键事件「立即告警」（放到本事务结束后发送，避免 notify_log 随回滚一并丢失）
+            String circuit = decision.violations().stream()
+                    .filter(v -> "R6".equals(v.rule()))
+                    .map(v -> v.message())
+                    .findFirst()
+                    .orElse(null);
+            if (circuit != null) {
+                afterTransaction(() -> alertService.circuitBreaker(circuit));
+            }
+            decision.orThrow();
+        }
 
         // 开仓前持仓快照：用于定位本次新开的 ticket（净持仓账户的 ticket 可能与订单号不同）
         Set<Long> before = ticketsOf(bridge.positions(symbol));
@@ -182,7 +201,21 @@ public class TradingService {
 
     private RiskRequest toRiskRequest(TradeCommand cmd, String traceId) {
         return new RiskRequest(cmd.action(), cmd.symbol(), cmd.side(), cmd.volume(), cmd.price(),
-                cmd.sl(), cmd.tp(), cmd.tpMode(), cmd.ticket(), cmd.sessionId(), traceId);
+                cmd.sl(), cmd.tp(), cmd.tpMode(), cmd.ticket(), cmd.sessionId(), traceId, cmd.origin());
+    }
+
+    /** 把副作用放到当前事务结束（提交/回滚）后执行；无事务则立即执行。 */
+    private static void afterTransaction(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
     }
 
     /** 券商拒绝（success=false）→ 归一化为可读原因并抛出；上层事务随之回滚，不留流水。 */

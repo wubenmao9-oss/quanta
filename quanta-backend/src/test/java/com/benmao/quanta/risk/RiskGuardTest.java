@@ -327,6 +327,19 @@ class RiskGuardTest {
         assertTrue(guard().evaluate(close).allowed());
     }
 
+    @Test
+    @DisplayName("R11 人工豁免：TAKEOVER 下人工开仓不被 R11 拦（AI 同参被拦），仍过其余硬规则")
+    void r11ManualExemptInTakeover() {
+        when(riskConfig.runMode()).thenReturn("TAKEOVER");
+        RiskRequest ai = new RiskRequest(RiskAction.OPEN, "GOLD", RiskSide.BUY, new BigDecimal("0.01"),
+                null, new BigDecimal("4189.23"), null, "SOFT_TP", null, null, "t-ai", RiskOrigin.AI);
+        assertViolated(guard().evaluate(ai), "R11", "RUN_MODE_TAKEOVER");
+
+        RiskRequest manual = new RiskRequest(RiskAction.OPEN, "GOLD", RiskSide.BUY, new BigDecimal("0.01"),
+                null, new BigDecimal("4189.23"), null, "SOFT_TP", null, null, "t-manual", RiskOrigin.MANUAL);
+        assertTrue(guard().evaluate(manual).allowed(), "人工开仓应豁免 R11 并放行其余规则");
+    }
+
     // ---------------- R12 价格偏离 ----------------
 
     @Test

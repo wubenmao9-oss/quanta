@@ -454,6 +454,37 @@ def positions(symbol: str = Query("")):
     } for p in ps]
 
 
+@app.get("/history/deals")
+def history_deals(from_ts: int = Query(...), to_ts: int = Query(...), symbol: str = Query("")):
+    """指定 [from_ts, to_ts] 区间的成交历史（UTC epoch 秒）。
+
+    symbol 为空 = 全部品种。对账用：entry=0 为开仓成交(IN)、entry=1 为平仓成交(OUT)，
+    position_id 即持仓 ticket，可与本地 trade_order.ticket 对齐。
+    """
+    if to_ts <= from_ts:
+        raise HTTPException(400, "to_ts 必须大于 from_ts")
+    ensure_connected()
+    date_from = datetime.fromtimestamp(from_ts, timezone.utc).replace(tzinfo=None)
+    date_to = datetime.fromtimestamp(to_ts, timezone.utc).replace(tzinfo=None)
+    deals = mt5.history_deals_get(date_from, date_to)
+    if not deals:
+        return []
+    out = []
+    for d in deals:
+        if symbol and d.symbol != symbol:
+            continue
+        out.append({
+            "ticket": d.ticket, "order": d.order, "position_id": d.position_id,
+            "symbol": d.symbol,
+            "type": "buy" if d.type == mt5.DEAL_TYPE_BUY else "sell",
+            "entry": d.entry,  # 0=IN 1=OUT 2=INOUT 3=OUT_BY
+            "volume": d.volume, "price": d.price,
+            "profit": round(d.profit, 2), "swap": round(d.swap, 2), "commission": round(d.commission, 2),
+            "time": ts_to_iso(d.time), "comment": d.comment,
+        })
+    return out
+
+
 @app.post("/order/buy")
 def order_buy(req: MarketOrderReq):
     return _market_order(req.symbol, True, req.volume, req.sl, req.tp, "java buy")

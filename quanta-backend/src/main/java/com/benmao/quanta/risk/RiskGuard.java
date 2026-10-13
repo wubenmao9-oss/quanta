@@ -87,7 +87,7 @@ public class RiskGuard {
         List<String> checked = new ArrayList<>();
 
         // ---- 不依赖行情的规则（快速拒绝）----
-        checkRunMode(action, runMode, violations, checked);          // R11
+        checkRunMode(action, req.origin(), runMode, violations, checked);  // R11
         if (action == RiskAction.OPEN) {
             checkWhitelist(req, th, violations, checked);            // R1
             checkVolume(req, th, violations, checked);               // R2
@@ -242,9 +242,18 @@ public class RiskGuard {
 
     // ==================== R11 人工开关（三态运行模式） ====================
 
-    private void checkRunMode(RiskAction action, String runMode,
+    /**
+     * R11 三态：仅约束 <b>AI 自主</b> 动作（{@link RiskOrigin#AI}）。
+     *
+     * <p>{@code PAUSED} 仅停开仓；{@code TAKEOVER} 停全部 AI 动作（人工确认后执行）。
+     * <b>人工</b>（{@link RiskOrigin#MANUAL}）是"人工介入"本身，豁免 R11，但仍受其余全部硬规则约束。
+     */
+    private void checkRunMode(RiskAction action, RiskOrigin origin, String runMode,
                               List<RiskViolation> v, List<String> checked) {
         checked.add("R11");
+        if (origin == RiskOrigin.MANUAL) {
+            return;
+        }
         Map<String, Object> b = Map.of("runMode", runMode);
         if ("PAUSED".equals(runMode) && action == RiskAction.OPEN) {
             v.add(RiskViolation.of("R11", "RUN_MODE_PAUSED",

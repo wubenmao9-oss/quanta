@@ -6,6 +6,7 @@ import com.benmao.quanta.common.ResultCode;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
+import com.benmao.quanta.ops.AlertService;
 import com.benmao.quanta.state.SystemStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,7 @@ public class TriggerEngine {
     private final ScheduleProperties props;
     private final List<TriggerRule> rules;
     private final SystemStateService stateService;
+    private final AlertService alertService;
     private final Clock clock;
 
     /** 上次时间驱动触发时刻（T2）。 */
@@ -77,8 +79,9 @@ public class TriggerEngine {
                          SessionManager sessionManager,
                          ScheduleProperties props,
                          List<TriggerRule> rules,
-                         SystemStateService stateService) {
-        this(watcher, bridge, tradePlanMapper, sessionManager, props, rules, stateService,
+                         SystemStateService stateService,
+                         AlertService alertService) {
+        this(watcher, bridge, tradePlanMapper, sessionManager, props, rules, stateService, alertService,
                 Clock.systemDefaultZone());
     }
 
@@ -90,6 +93,7 @@ public class TriggerEngine {
                   ScheduleProperties props,
                   List<TriggerRule> rules,
                   SystemStateService stateService,
+                  AlertService alertService,
                   Clock clock) {
         this.watcher = watcher;
         this.bridge = bridge;
@@ -100,6 +104,7 @@ public class TriggerEngine {
                 : rules.stream().sorted(Comparator.comparing((TriggerRule r) -> r.source().name())
                         .thenComparing(TriggerRule::name)).toList();
         this.stateService = stateService;
+        this.alertService = alertService;
         this.clock = clock;
     }
 
@@ -248,11 +253,15 @@ public class TriggerEngine {
         }
     }
 
-    /** T7 断线恢复：观测到 false → true 的跃迁即命中。 */
+    /** T7 断线恢复/告警：观测连接跃迁（false↔true）即告警；false → true 同时命中 T7。 */
     private void handleReconnect(boolean connected) {
         if (lastConnected != null && !lastConnected && connected) {
+            alertService.connectivityUp("symbol=" + watcher.symbol());
             dispatch(new TriggerHit(TriggerSource.T7, watcher.symbol(), "断线恢复",
                     null, null, null, clock.instant()));
+        } else if (lastConnected != null && lastConnected && !connected) {
+            alertService.connectivityDown("symbol=" + watcher.symbol()
+                    + "，连续失败 " + watcher.consecutiveFailures() + " 次");
         }
         lastConnected = connected;
     }

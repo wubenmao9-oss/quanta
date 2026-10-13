@@ -6,6 +6,7 @@ import com.benmao.quanta.bridge.Mt5BridgeService;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
+import com.benmao.quanta.ops.AlertService;
 import com.benmao.quanta.state.SystemStateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +45,7 @@ class TriggerEngineTest {
     private SessionManager sessionManager;
     private ScheduleProperties props;
     private SystemStateService stateService;
+    private AlertService alertService;
     private MutableClock clock;
 
     @BeforeEach
@@ -53,6 +55,7 @@ class TriggerEngineTest {
         tradePlanMapper = mock(TradePlanMapper.class);
         sessionManager = mock(SessionManager.class);
         stateService = mock(SystemStateService.class);
+        alertService = mock(AlertService.class);
         props = new ScheduleProperties();
         clock = new MutableClock(T0);
 
@@ -216,11 +219,32 @@ class TriggerEngineTest {
         verify(sessionManager, never()).acquire(any(), any(), any(), any());
     }
 
+    // ==================== T7 断线/恢复告警（M13） ====================
+
+    @Test
+    @DisplayName("T7 断线/恢复：连接跃迁各触发一次关键事件告警，恢复时命中 T7")
+    void t7ConnectivityAlertsOnTransitions() {
+        when(watcher.connected()).thenReturn(true);
+        TriggerEngine engine = engine(List.of());
+        engine.scan();   // 首次建立基线（null → true），不告警
+
+        when(watcher.connected()).thenReturn(false);
+        when(watcher.consecutiveFailures()).thenReturn(3L);
+        engine.scan();   // true → false：断线告警
+
+        when(watcher.connected()).thenReturn(true);
+        engine.scan();   // false → true：恢复告警 + T7 命中
+
+        verify(alertService).connectivityDown(anyString());
+        verify(alertService).connectivityUp(anyString());
+        assertTrue(hasHit(engine, TriggerSource.T7));
+    }
+
     // ==================== 辅助 ====================
 
     private TriggerEngine engine(List<TriggerRule> rules) {
         return new TriggerEngine(watcher, bridge, tradePlanMapper, sessionManager, props, rules,
-                stateService, clock);
+                stateService, alertService, clock);
     }
 
     private boolean hasHit(TriggerEngine engine, TriggerSource source) {

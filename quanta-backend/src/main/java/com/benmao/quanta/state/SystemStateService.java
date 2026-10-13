@@ -38,6 +38,28 @@ public class SystemStateService {
         return Boolean.TRUE.equals(current().getDegraded());
     }
 
+    /** 当前运行模式（AUTO / PAUSED / TAKEOVER）；无记录或空 → AUTO。 */
+    public RunMode runMode() {
+        String raw = current().getRunMode();
+        return (raw == null || raw.isBlank()) ? RunMode.AUTO : RunMode.parse(raw);
+    }
+
+    /**
+     * 设置运行模式并落库（设计 §8.1 三态，重启后保持）。
+     *
+     * @return 是否发生了变化（幂等：相同模式返回 {@code false}）
+     */
+    public boolean setRunMode(String mode) {
+        RunMode target = RunMode.parse(mode);
+        SysState s = ensureRow();
+        if (target.name().equals(s.getRunMode())) {
+            return false;
+        }
+        s.setRunMode(target.name());
+        mapper.update(s);
+        return true;
+    }
+
     /** 当日已用 Token（sys_state.token_used_today）。 */
     public long tokenUsedToday() {
         Long v = current().getTokenUsedToday();

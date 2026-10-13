@@ -3,6 +3,7 @@ package com.benmao.quanta.bridge;
 import com.benmao.mt5.Mt5;
 import com.benmao.mt5.Mt5Client;
 import com.benmao.mt5.model.AccountInfo;
+import com.benmao.mt5.model.Deal;
 import com.benmao.mt5.model.KlineBar;
 import com.benmao.mt5.model.OrderResult;
 import com.benmao.mt5.model.Position;
@@ -104,6 +105,12 @@ public class Mt5BridgeService {
         return call("取持仓", () -> (symbol == null || symbol.isBlank())
                 ? mt5.account.getPositions()
                 : mt5.account.getPositions(symbol));
+    }
+
+    /** 成交历史（UTC epoch 秒区间 [fromEpoch, toEpoch)）；对账用。 */
+    public List<Deal> historyDeals(long fromEpoch, long toEpoch) {
+        ensureLoggedIn();
+        return call("取成交历史", () -> mt5.account.historyDeals(fromEpoch, toEpoch));
     }
 
     /** 券商可用品种清单（名称映射校验用）。 */

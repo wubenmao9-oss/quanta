@@ -3,6 +3,7 @@ package com.benmao.quanta.trade;
 import com.benmao.quanta.common.GlobalExceptionHandler;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradeOrder;
+import com.benmao.quanta.ops.ManualTradeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,16 +23,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** 交易接口单测（M6）：开仓/平仓/改仓入参装配 + 风控拒绝透传 + 非法方向被拒。 */
+/** 交易接口单测（M6）：开仓/平仓/改仓入参装配 + 风控拒绝透传 + 非法方向被拒（M13 起人工入口走 ManualTradeService）。 */
 class TradeControllerTest {
 
-    private TradingService tradingService;
+    private ManualTradeService manualTradeService;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        tradingService = mock(TradingService.class);
-        mvc = MockMvcBuilders.standaloneSetup(new TradeController(tradingService))
+        manualTradeService = mock(ManualTradeService.class);
+        mvc = MockMvcBuilders.standaloneSetup(new TradeController(manualTradeService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -39,7 +40,7 @@ class TradeControllerTest {
     @Test
     @DisplayName("POST /open：入参正确装配为 OPEN 命令并回传流水")
     void openPassesThrough() throws Exception {
-        when(tradingService.openPosition(any())).thenReturn(order(1001L, 7001L, "FILLED"));
+        when(manualTradeService.open(any())).thenReturn(order(1001L, 7001L, "FILLED"));
 
         mvc.perform(post("/api/trade/open").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbol\":\"GOLD\",\"side\":\"buy\",\"volume\":0.01,"
@@ -50,7 +51,7 @@ class TradeControllerTest {
                 .andExpect(jsonPath("$.data.ticket").value(7001));
 
         ArgumentCaptor<TradeCommand> captor = ArgumentCaptor.forClass(TradeCommand.class);
-        verify(tradingService).openPosition(captor.capture());
+        verify(manualTradeService).open(captor.capture());
         TradeCommand cmd = captor.getValue();
         org.junit.jupiter.api.Assertions.assertEquals("OPEN", cmd.action().name());
         org.junit.jupiter.api.Assertions.assertEquals("BUY", cmd.side().name());
@@ -60,7 +61,7 @@ class TradeControllerTest {
     @Test
     @DisplayName("POST /open：风控拒绝 → HTTP 400 且透传结构化原因")
     void openRejectedByRisk() throws Exception {
-        when(tradingService.openPosition(any())).thenThrow(new BizException(
+        when(manualTradeService.open(any())).thenThrow(new BizException(
                 com.benmao.quanta.common.ResultCode.BIZ_ERROR.code(),
                 "风控拒绝[R5]：开仓必须设置止损（SL 不能为空或 0）；合法边界 {minSlDistance=0.75}", 400));
 
@@ -83,7 +84,7 @@ class TradeControllerTest {
     @Test
     @DisplayName("POST /close：按 ticket 平仓并回传 CLOSED 流水")
     void closePassesThrough() throws Exception {
-        when(tradingService.closePosition(any())).thenReturn(order(1002L, 7001L, "CLOSED"));
+        when(manualTradeService.close(any())).thenReturn(order(1002L, 7001L, "CLOSED"));
 
         mvc.perform(post("/api/trade/close").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbol\":\"GOLD\",\"ticket\":7001,\"traceId\":\"t2\"}"))
@@ -94,7 +95,7 @@ class TradeControllerTest {
     @Test
     @DisplayName("POST /modify：改 SL/TP 并回传流水")
     void modifyPassesThrough() throws Exception {
-        when(tradingService.modifySlTp(any())).thenReturn(order(1003L, 7001L, "FILLED"));
+        when(manualTradeService.modify(any())).thenReturn(order(1003L, 7001L, "FILLED"));
 
         mvc.perform(post("/api/trade/modify").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"symbol\":\"GOLD\",\"ticket\":7001,\"sl\":4198.10}"))
