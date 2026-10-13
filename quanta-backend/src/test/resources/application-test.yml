@@ -13,3 +13,7 @@ quanta:
     # 测试环境关闭后台定时任务，避免盯盘/触发在其它用例中产生干扰与噪声日志；
     # M7 用例直接调用 MarketWatcher.poll() / TriggerEngine.scan() 验证行为。
     enabled: false
+  budget:
+    # 测试环境关闭 Token 预算的定时检查/重置，避免后台任务在其它用例中产生干扰与噪声库写入；
+    # M12 用例直接调用 BudgetGuard.check()/status() 验证行为。
+    enabled: false

@@ -220,6 +220,26 @@ quanta:
       indicator:
         rsi-overbought: 70.0
         rsi-oversold: 30.0
+  # Token 预算与降级（M12，设计 §8.4）：按日聚合比较 / 超限降级 / 次日或人工恢复（全部集中配置）
+  budget:
+    # 总开关：关闭后不再自动检查与降级
+    enabled: ${QUANTA_BUDGET_ENABLED:true}
+    # 定时检查间隔（毫秒）；0 或负数 = 不按间隔检查（仅人工 /check 触发）
+    check-interval-ms: 60000
+    # 次日自动重置的 cron（默认每日 00:00）
+    reset-cron: "0 0 0 * * *"
+    # operation_audit.operator 取值
+    audit-operator: BUDGET_GUARD
+    # notify_log.notify_type 取值
+    notify-type: TOKEN_DEGRADE
+    # 降级处置（遍历持仓）
+    degrade:
+      # 保留仓位补挂 HARD SL 的固定距离（points；>0）
+      hard-sl-points: 300.0
+      # 是否同时补挂 HARD TP（默认否：验收只要求「至少保留 HARD SL」）
+      ensure-hard-tp: false
+      # 补挂 HARD TP 的固定距离（points；仅 ensure-hard-tp=true 时生效）
+      hard-tp-points: 300.0
   # 回测层（M8）：事件驱动 M1 重放 + 点差多档扫描（设计 §13）
   backtest:
     symbol: ${QUANTA_MT5_SYMBOL:GOLD}

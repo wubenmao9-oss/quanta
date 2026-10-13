@@ -6,6 +6,7 @@ import com.benmao.quanta.bridge.Mt5BridgeService;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
+import com.benmao.quanta.state.SystemStateService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,7 @@ class TriggerEngineTest {
     private TradePlanMapper tradePlanMapper;
     private SessionManager sessionManager;
     private ScheduleProperties props;
+    private SystemStateService stateService;
     private MutableClock clock;
 
     @BeforeEach
@@ -50,6 +52,7 @@ class TriggerEngineTest {
         bridge = mock(Mt5BridgeService.class);
         tradePlanMapper = mock(TradePlanMapper.class);
         sessionManager = mock(SessionManager.class);
+        stateService = mock(SystemStateService.class);
         props = new ScheduleProperties();
         clock = new MutableClock(T0);
 
@@ -57,6 +60,7 @@ class TriggerEngineTest {
         when(watcher.connected()).thenReturn(true);
         when(watcher.snapshot()).thenReturn(snapshot());
         when(bridge.positions(anyString())).thenReturn(List.of());
+        when(stateService.isDegraded()).thenReturn(false);
         when(sessionManager.acquire(any(), any(), any(), any())).thenReturn(new SessionManager.AcquireResult(
                 SessionManager.AcquireStatus.ACQUIRED,
                 new SessionManager.Lease(1, "GOLD", null, TriggerSource.T1, false), 0));
@@ -185,10 +189,38 @@ class TriggerEngineTest {
         verify(tradePlanMapper, never()).listPendingUnexpired(any());
     }
 
+    @Test
+    @DisplayName("降级态（Token 超限）：扫描关闭全部触发，不产生任何命中、不改计划状态")
+    void degradedClosesAllTriggers() {
+        when(stateService.isDegraded()).thenReturn(true);
+        when(tradePlanMapper.listPendingUnexpired(any())).thenReturn(List.of(plan(3L, "4200")));
+        TriggerEngine engine = engine(List.of(stubRule(TriggerSource.T3, true)));
+
+        engine.scan();
+
+        assertTrue(engine.recentHits().isEmpty());
+        verify(tradePlanMapper, never()).listPendingUnexpired(any());
+        verify(sessionManager, never()).acquire(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("降级时人工唤醒（T6）也不分发")
+    void degradedBlocksManualWake() {
+        TriggerEngine engine = engine(List.of());
+        when(stateService.isDegraded()).thenReturn(true);
+
+        engine.manualWake("降级期间唤醒");
+        engine.scan();
+
+        assertTrue(engine.recentHits().isEmpty());
+        verify(sessionManager, never()).acquire(any(), any(), any(), any());
+    }
+
     // ==================== 辅助 ====================
 
     private TriggerEngine engine(List<TriggerRule> rules) {
-        return new TriggerEngine(watcher, bridge, tradePlanMapper, sessionManager, props, rules, clock);
+        return new TriggerEngine(watcher, bridge, tradePlanMapper, sessionManager, props, rules,
+                stateService, clock);
     }
 
     private boolean hasHit(TriggerEngine engine, TriggerSource source) {

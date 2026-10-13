@@ -6,6 +6,7 @@ import com.benmao.quanta.common.ResultCode;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.TradePlanMapper;
+import com.benmao.quanta.state.SystemStateService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +33,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * <p>触发源（设计 §6.2）：T1/T2/T5/T6/T7 为内建，T3/T4 为插件（{@link TriggerRule}）。每个触发源都有独立开关，
  * 由 {@link ScheduleProperties.Trigger#enabled(TriggerSource)} 控制。
  *
+ * <p><b>降级门控（M12）</b>：当 {@code sys_state.degraded=true}（Token 预算超限）时，扫描与分发<b>全部关闭触发</b>
+ * （设计 §8.4）——读取降级态失败时按「未降级」处理（fail-open），避免库抖动使盯盘整体停摆。
+ *
  * <p>鲁棒性：单个触发的判定/分发异常被隔离，绝不中断扫描循环。
  */
 @Service
@@ -51,6 +55,7 @@ public class TriggerEngine {
     private final SessionManager sessionManager;
     private final ScheduleProperties props;
     private final List<TriggerRule> rules;
+    private final SystemStateService stateService;
     private final Clock clock;
 
     /** 上次时间驱动触发时刻（T2）。 */
@@ -71,8 +76,10 @@ public class TriggerEngine {
                          TradePlanMapper tradePlanMapper,
                          SessionManager sessionManager,
                          ScheduleProperties props,
-                         List<TriggerRule> rules) {
-        this(watcher, bridge, tradePlanMapper, sessionManager, props, rules, Clock.systemDefaultZone());
+                         List<TriggerRule> rules,
+                         SystemStateService stateService) {
+        this(watcher, bridge, tradePlanMapper, sessionManager, props, rules, stateService,
+                Clock.systemDefaultZone());
     }
 
     /** 测试用：可注入固定时钟。 */
@@ -82,6 +89,7 @@ public class TriggerEngine {
                   SessionManager sessionManager,
                   ScheduleProperties props,
                   List<TriggerRule> rules,
+                  SystemStateService stateService,
                   Clock clock) {
         this.watcher = watcher;
         this.bridge = bridge;
@@ -91,6 +99,7 @@ public class TriggerEngine {
         this.rules = rules == null ? List.of()
                 : rules.stream().sorted(Comparator.comparing((TriggerRule r) -> r.source().name())
                         .thenComparing(TriggerRule::name)).toList();
+        this.stateService = stateService;
         this.clock = clock;
     }
 
@@ -98,6 +107,10 @@ public class TriggerEngine {
     @Scheduled(fixedDelayString = "${quanta.schedule.trigger.scan-interval-ms:1000}")
     public void scan() {
         if (!props.isEnabled()) {
+            return;
+        }
+        // Token 预算降级（DEGRADED）→ 关闭全部触发（设计 §8.4；budget 层置位）
+        if (degraded()) {
             return;
         }
         boolean connected = watcher.connected();
@@ -256,7 +269,7 @@ public class TriggerEngine {
 
     /** 命中分发：过独立开关 → 记历史 → 申请会话窗口。分发异常被隔离。 */
     private void dispatch(TriggerHit hit) {
-        if (hit == null || !props.getTrigger().enabled(hit.source())) {
+        if (hit == null || !props.getTrigger().enabled(hit.source()) || degraded()) {
             return;
         }
         synchronized (recentHits) {
@@ -287,6 +300,16 @@ public class TriggerEngine {
             action.run();
         } catch (RuntimeException e) {
             log.warn("触发源 {} 判定异常（已隔离）：{}", source, e.getMessage());
+        }
+    }
+
+    /** 是否处于 Token 预算降级态；读取失败按「未降级」处理（fail-open，避免库抖动使盯盘整体停摆）。 */
+    private boolean degraded() {
+        try {
+            return stateService.isDegraded();
+        } catch (RuntimeException e) {
+            log.warn("读取降级态失败，本次按未降级处理：{}", e.getMessage());
+            return false;
         }
     }
 }

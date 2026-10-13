@@ -57,6 +57,13 @@ public interface AgentDecisionLogMapper {
                              @Param("since") LocalDateTime since,
                              @Param("until") LocalDateTime until);
 
+    // ==================== 预算层（M12）查询 ====================
+
+    /** 区间内 Token 用量之和（按日聚合预算：create_time ∈ [since, until)）；无记录返回 0。 */
+    @Select("SELECT COALESCE(SUM(tokens), 0) FROM agent_decision_log "
+            + "WHERE create_time >= #{since} AND create_time < #{until}")
+    Long sumTokensBetween(@Param("since") LocalDateTime since, @Param("until") LocalDateTime until);
+
     @Update("UPDATE agent_decision_log SET session_id = #{sessionId}, trace_id = #{traceId}, "
             + "trigger_type = #{triggerType}, input_snapshot = #{inputSnapshot}, model = #{model}, "
             + "prompt_version = #{promptVersion}, action = #{action}, action_params = #{actionParams}, "
