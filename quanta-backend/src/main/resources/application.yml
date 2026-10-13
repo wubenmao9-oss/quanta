@@ -48,6 +48,25 @@ quanta:
     # 优先取环境变量 QUANTA_CONFIG_AES_KEY；本地开发可写在 application-local.yml。
     # 为空则启动直接失败（宁可起不来，也不允许明文存凭据）。
     aes-key: ${QUANTA_CONFIG_AES_KEY:}
+  # Agent 中枢（M10）：返回契约 / 置信度门控 / 快照与工具参数（全部集中配置，核心代码不得写死）
+  agent:
+    # 总开关：关闭后 /api/agent/decide 一律拒绝
+    enabled: ${QUANTA_AGENT_ENABLED:true}
+    # 置信度门控阈值（0~1）：confidence < 阈值 → 强制降级 WAIT（设计 §3）
+    confidence-threshold: 0.6
+    # 默认品种（券商真实名）/ 周期
+    default-symbol: ${QUANTA_MT5_SYMBOL:GOLD}
+    default-timeframe: M5
+    # 工具与快照默认拉取的 K 线根数 / 回传给模型的最近根数
+    kline-count: 200
+    snapshot-bar-count: 20
+    # 单次大模型调用超时（秒）；max-tokens 留空 = 不限制
+    model-timeout-seconds: 60
+    max-tokens:
+    # 模型未给手数时的默认手数
+    default-volume: 0.01
+    # 决策日志列表默认条数
+    decision-list-default-limit: 20
   mt5:
     # MT5 桥接服务（mt5_service）地址，用于「测试连接」探活 /health
     base-url: ${QUANTA_MT5_BASE_URL:http://127.0.0.1:8765}

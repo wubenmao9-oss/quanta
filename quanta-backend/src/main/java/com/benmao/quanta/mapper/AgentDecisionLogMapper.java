@@ -28,6 +28,10 @@ public interface AgentDecisionLogMapper {
     @Select("SELECT * FROM agent_decision_log ORDER BY id")
     List<AgentDecisionLog> listAll();
 
+    /** 最近 N 条（最新在前），供 /api/agent/decisions 观测。 */
+    @Select("SELECT * FROM agent_decision_log ORDER BY id DESC LIMIT #{limit}")
+    List<AgentDecisionLog> listRecent(@Param("limit") int limit);
+
     @Update("UPDATE agent_decision_log SET session_id = #{sessionId}, trace_id = #{traceId}, "
             + "trigger_type = #{triggerType}, input_snapshot = #{inputSnapshot}, model = #{model}, "
             + "prompt_version = #{promptVersion}, action = #{action}, action_params = #{actionParams}, "
