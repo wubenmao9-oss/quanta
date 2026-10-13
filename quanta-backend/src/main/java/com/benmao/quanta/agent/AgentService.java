@@ -8,6 +8,7 @@ import com.benmao.quanta.entity.TradeOrder;
 import com.benmao.quanta.entity.TradePlan;
 import com.benmao.quanta.mapper.AgentDecisionLogMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
+import com.benmao.quanta.memory.MemoryService;
 import com.benmao.quanta.schedule.TriggerSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
@@ -77,6 +78,7 @@ public class AgentService {
     private final AgentMarketTools marketTools;
     private final StrategyMapper strategyMapper;
     private final AgentDecisionLogMapper logMapper;
+    private final MemoryService memoryService;
     private final ObjectMapper mapper;
 
     public AgentService(AgentProperties props,
@@ -89,6 +91,7 @@ public class AgentService {
                         AgentMarketTools marketTools,
                         StrategyMapper strategyMapper,
                         AgentDecisionLogMapper logMapper,
+                        MemoryService memoryService,
                         ObjectMapper mapper) {
         this.props = props;
         this.snapshotService = snapshotService;
@@ -100,6 +103,7 @@ public class AgentService {
         this.marketTools = marketTools;
         this.strategyMapper = strategyMapper;
         this.logMapper = logMapper;
+        this.memoryService = memoryService;
         this.mapper = mapper;
     }
 
@@ -174,6 +178,13 @@ public class AgentService {
         log.info("Agent 决策落库 id={} session={} trigger={} 原动作={} 最终动作={} confidence={} tokens={} latency={}ms 执行={} 执行错误={}",
                 entity.getId(), sessionId, triggerType, modelAction, gated.action(), gated.confidence(),
                 tokens, latencyMs, exec.executed(), exec.error());
+
+        // 记忆钩子（best-effort）：会话内决策数达阈值即产出一张记忆卡；失败绝不影响本次研判结果
+        try {
+            memoryService.afterDecision(sessionId, symbol, strategy.getId(), null);
+        } catch (RuntimeException e) {
+            log.warn("记忆卡产出失败（不影响本次决策）：session={} err={}", sessionId, e.getMessage());
+        }
 
         return new AgentDecideResult(entity.getId(), sessionId, traceId, triggerType,
                 strategy.getId(), strategy.getName(), strategy.getVersion(), model,

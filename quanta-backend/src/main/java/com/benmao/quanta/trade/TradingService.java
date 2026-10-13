@@ -12,8 +12,10 @@ import com.benmao.quanta.risk.RiskAction;
 import com.benmao.quanta.risk.RiskGuard;
 import com.benmao.quanta.risk.RiskRequest;
 import com.benmao.quanta.risk.RiskSide;
+import com.benmao.quanta.review.TradeClosedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,13 +50,16 @@ public class TradingService {
     private final Mt5BridgeService bridge;
     private final RiskGuard riskGuard;
     private final TradeOrderMapper tradeOrderMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
     public TradingService(Mt5BridgeService bridge,
                           RiskGuard riskGuard,
-                          TradeOrderMapper tradeOrderMapper) {
+                          TradeOrderMapper tradeOrderMapper,
+                          ApplicationEventPublisher eventPublisher) {
         this.bridge = bridge;
         this.riskGuard = riskGuard;
         this.tradeOrderMapper = tradeOrderMapper;
+        this.eventPublisher = eventPublisher;
     }
 
     // ==================== 开仓 ====================
@@ -135,6 +140,8 @@ public class TradingService {
 
         log.info("平仓成交并落库 trace={} ticket={} profit={} swap={} closePrice={}",
                 traceId, ticket, order.getProfit(), order.getSwap(), order.getClosePrice());
+        // 平仓事务提交后触发复盘（AFTER_COMMIT 监听生成单笔报告；报告失败不回滚本次成交）
+        eventPublisher.publishEvent(new TradeClosedEvent(order));
         return order;
     }
 

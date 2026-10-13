@@ -11,10 +11,12 @@ import com.benmao.quanta.risk.RiskDecision;
 import com.benmao.quanta.risk.RiskGuard;
 import com.benmao.quanta.risk.RiskSide;
 import com.benmao.quanta.risk.RiskViolation;
+import com.benmao.quanta.review.TradeClosedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -47,6 +49,7 @@ class TradingServiceTest {
     private Mt5BridgeService bridge;
     private RiskGuard riskGuard;
     private TradeOrderMapper mapper;
+    private ApplicationEventPublisher eventPublisher;
     private TradingService service;
 
     @BeforeEach
@@ -54,7 +57,8 @@ class TradingServiceTest {
         bridge = mock(Mt5BridgeService.class);
         riskGuard = mock(RiskGuard.class);
         mapper = mock(TradeOrderMapper.class);
-        service = new TradingService(bridge, riskGuard, mapper);
+        eventPublisher = mock(ApplicationEventPublisher.class);
+        service = new TradingService(bridge, riskGuard, mapper, eventPublisher);
     }
 
     // ==================== 开仓 ====================
@@ -146,6 +150,24 @@ class TradingServiceTest {
         assertEquals(0, new BigDecimal("4205.60").compareTo(done.getClosePrice()));
         assertNotNull(done.getCloseTime());
         verify(mapper).update(existing);
+    }
+
+    @Test
+    @DisplayName("平仓成交后发布 TradeClosedEvent（供复盘 AFTER_COMMIT 监听）")
+    void closePublishesTradeClosedEvent() {
+        TradeOrder existing = filledOrder(900L, 7001L);
+        when(riskGuard.evaluate(any())).thenReturn(allowed(RiskAction.CLOSE));
+        when(mapper.findLatestByTicket(7001L)).thenReturn(existing);
+        when(bridge.positions(null)).thenReturn(List.of(position(7001L, "buy", 4200.0, -1.25)));
+        when(bridge.closePosition("GOLD", 7001L))
+                .thenReturn(new OrderResult(true, 10009, 7001L, 88001L, 0.01, 4205.60, "done", null, 7001L, 15.50));
+
+        TradeOrder done = service.closePosition(close(7001L, "trace-close-1"));
+
+        ArgumentCaptor<TradeClosedEvent> c = ArgumentCaptor.forClass(TradeClosedEvent.class);
+        verify(eventPublisher).publishEvent(c.capture());
+        assertEquals(done.getId(), c.getValue().order().getId());
+        assertEquals("CLOSED", c.getValue().order().getStatus());
     }
 
     @Test

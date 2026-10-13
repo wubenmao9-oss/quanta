@@ -67,6 +67,30 @@ quanta:
     default-volume: 0.01
     # 决策日志列表默认条数
     decision-list-default-limit: 20
+  # 记忆层（M11）：结构化记忆卡（规则拼装，不调大模型；设计 §11 / §18）
+  memory:
+    # 总开关：关闭后不再产出记忆卡
+    enabled: ${QUANTA_MEMORY_ENABLED:true}
+    # 记忆总结间隔：会话内每 N 次决策产出一张卡（合法范围 5~50，非法拒绝并回执边界）
+    summary-every: 10
+    # 会话记忆条数：进上下文的最近条数（合法范围 5~50）
+    memory-window: 10
+    # 记忆卡摘要长度上限（对齐 agent_memory.summary VARCHAR(500)）
+    summary-max-len: 500
+    # 记忆检索列表默认条数
+    list-default-limit: 20
+  # 复盘层（M11）：单笔报告 / 周期统计 / 败因分类 / 策略评价 / 成本分析（统计复盘，不训练模型；设计 §12）
+  review:
+    # 总开关：关闭后平仓不再自动出报告（其余统计接口仍可调用）
+    enabled: ${QUANTA_REVIEW_ENABLED:true}
+    # 列表默认条数
+    list-default-limit: 20
+    # 初始权益（USD），用于周期统计的净值/回撤口径
+    initial-equity: 500.0
+    # 「早平」判定：盈利单持仓短于该秒数即计入早平归因
+    early-close-sec: 120
+    # 周期统计默认回看天数（since 未显式给出时）
+    default-lookback-days: 30
   mt5:
     # MT5 桥接服务（mt5_service）地址，用于「测试连接」探活 /health
     base-url: ${QUANTA_MT5_BASE_URL:http://127.0.0.1:8765}

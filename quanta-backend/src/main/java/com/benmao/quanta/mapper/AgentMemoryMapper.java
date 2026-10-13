@@ -33,4 +33,26 @@ public interface AgentMemoryMapper {
 
     @Delete("DELETE FROM agent_memory WHERE id = #{id}")
     int deleteById(@Param("id") Long id);
+
+    // ==================== 记忆检索（M11，设计 §11 一期按标签检索） ====================
+
+    /** 最近 N 张记忆卡（最新在前）。 */
+    @Select("SELECT * FROM agent_memory ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMemory> listRecent(@Param("limit") int limit);
+
+    /** 按作用域检索（GLOBAL/SYMBOL/STRATEGY）。 */
+    @Select("SELECT * FROM agent_memory WHERE scope = #{scope} ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMemory> listByScope(@Param("scope") String scope, @Param("limit") int limit);
+
+    /** 按品种检索。 */
+    @Select("SELECT * FROM agent_memory WHERE symbol = #{symbol} ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMemory> listBySymbol(@Param("symbol") String symbol, @Param("limit") int limit);
+
+    /** 按策略检索。 */
+    @Select("SELECT * FROM agent_memory WHERE strategy_id = #{strategyId} ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMemory> listByStrategy(@Param("strategyId") Long strategyId, @Param("limit") int limit);
+
+    /** 按标签模糊检索（tags 为逗号分隔标签串）。 */
+    @Select("SELECT * FROM agent_memory WHERE tags LIKE CONCAT('%', #{tag}, '%') ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMemory> listByTag(@Param("tag") String tag, @Param("limit") int limit);
 }

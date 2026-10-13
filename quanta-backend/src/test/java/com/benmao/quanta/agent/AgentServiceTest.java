@@ -7,6 +7,7 @@ import com.benmao.quanta.entity.TradeOrder;
 import com.benmao.quanta.mapper.AgentDecisionLogMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
 import com.benmao.quanta.mapper.TradePlanMapper;
+import com.benmao.quanta.memory.MemoryService;
 import com.benmao.quanta.trade.TradeCommand;
 import com.benmao.quanta.trade.TradingService;
 import dev.langchain4j.model.output.TokenUsage;
@@ -55,6 +56,7 @@ class AgentServiceTest {
     private AgentMarketTools marketTools;
     private StrategyMapper strategyMapper;
     private AgentDecisionLogMapper logMapper;
+    private MemoryService memoryService;
     private AgentService service;
 
     @BeforeEach
@@ -69,10 +71,11 @@ class AgentServiceTest {
         marketTools = mock(AgentMarketTools.class);
         strategyMapper = mock(StrategyMapper.class);
         logMapper = mock(AgentDecisionLogMapper.class);
+        memoryService = mock(MemoryService.class);
 
         AgentWriteTools writeTools = new AgentWriteTools(tradingService, planMapper);
         service = new AgentService(props, snapshot, ai, new AgentDecisionParser(om), writeTools,
-                sessionService, modelFactory, marketTools, strategyMapper, logMapper, om);
+                sessionService, modelFactory, marketTools, strategyMapper, logMapper, memoryService, om);
 
         when(sessionService.ensureSession(any(), any(), any(), any(), any())).thenReturn(7L);
         when(snapshot.build(any(), any())).thenReturn(new LinkedHashMap<>(Map.of("symbol", "GOLD")));
@@ -230,6 +233,28 @@ class AgentServiceTest {
         assertTrue(String.valueOf(d.get("actions")).contains("NOOP"));
         assertEquals(0.6, (Double) d.get("confidenceThreshold"), 1e-9);
         assertEquals(6, ((List<?>) d.get("readTools")).size());
+    }
+
+    @Test
+    @DisplayName("决策落库后调用记忆钩子（best-effort，携带会话/品种/策略）")
+    void memoryHookInvokedAfterDecision() {
+        when(ai.decide(any(), any())).thenReturn(llm("{\"action\":\"WAIT\",\"confidence\":0.8,\"reason\":\"观察\"}"));
+
+        service.decide(req());
+
+        verify(memoryService).afterDecision(7L, "GOLD", 13L, null);
+    }
+
+    @Test
+    @DisplayName("记忆钩子异常不影响决策结果（best-effort 吞异常）")
+    void memoryHookFailureIsSwallowed() {
+        when(ai.decide(any(), any())).thenReturn(llm("{\"action\":\"WAIT\",\"confidence\":0.8,\"reason\":\"观察\"}"));
+        when(memoryService.afterDecision(any(), any(), any(), any()))
+                .thenThrow(new BizException("记忆层故障"));
+
+        AgentDecideResult r = service.decide(req());
+
+        assertEquals(AgentAction.WAIT, r.action());
     }
 
     // ==================== 辅助 ====================

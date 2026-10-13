@@ -26,6 +26,14 @@ public interface TradeReportMapper {
     @Select("SELECT * FROM trade_report ORDER BY id")
     List<TradeReport> listAll();
 
+    /** 按订单 id 取报告（用于幂等：同一订单只出一次报告）。 */
+    @Select("SELECT * FROM trade_report WHERE order_id = #{orderId} ORDER BY id DESC LIMIT 1")
+    TradeReport findByOrderId(@Param("orderId") Long orderId);
+
+    /** 最近 N 份报告（最新在前），供复盘观测。 */
+    @Select("SELECT * FROM trade_report ORDER BY id DESC LIMIT #{limit}")
+    List<TradeReport> listRecent(@Param("limit") int limit);
+
     @Update("UPDATE trade_report SET order_id = #{orderId}, session_id = #{sessionId}, "
             + "action_timeline = #{actionTimeline}, summary = #{summary}, pnl = #{pnl}, result = #{result}, "
             + "reviewed = #{reviewed} WHERE id = #{id}")
