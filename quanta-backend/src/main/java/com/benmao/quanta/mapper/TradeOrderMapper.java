@@ -31,6 +31,15 @@ public interface TradeOrderMapper {
     @Select("SELECT * FROM trade_order ORDER BY id")
     List<TradeOrder> listAll();
 
+    /**
+     * 最近成交流水（最新在前），可选按状态过滤（OPEN/FILLED/CLOSED/…），
+     * 供 {@code GET /api/trade/orders} 逐笔列表与前端净值曲线取数。
+     */
+    @Select("<script>SELECT * FROM trade_order"
+            + "<if test='status != null'> WHERE status = #{status}</if>"
+            + " ORDER BY id DESC LIMIT #{limit}</script>")
+    List<TradeOrder> listRecent(@Param("status") String status, @Param("limit") int limit);
+
     @Update("UPDATE trade_order SET plan_id = #{planId}, session_id = #{sessionId}, trace_id = #{traceId}, "
             + "ticket = #{ticket}, symbol = #{symbol}, cmd = #{cmd}, volume = #{volume}, price = #{price}, sl = #{sl}, "
             + "tp = #{tp}, tp_mode = #{tpMode}, trail_mode = #{trailMode}, status = #{status}, retcode = #{retcode}, "
@@ -92,4 +101,22 @@ public interface TradeOrderMapper {
     List<TradeOrder> listClosedByStrategy(@Param("strategyId") Long strategyId,
                                           @Param("since") LocalDateTime since,
                                           @Param("until") LocalDateTime until);
+
+    // ==================== 会话生命周期对账 ====================
+
+    /**
+     * 按会话聚合订单数：total=该会话下单总数，openCnt=其中仍为在场（status='FILLED'）的单数。
+     * 供会话自动关闭对账使用（total&gt;0 且 openCnt=0 表示持仓生命周期已结束）。
+     */
+    @Select("SELECT session_id AS sessionId, COUNT(1) AS total, "
+            + "SUM(CASE WHEN status = 'FILLED' THEN 1 ELSE 0 END) AS openCnt "
+            + "FROM trade_order WHERE session_id IS NOT NULL GROUP BY session_id")
+    List<java.util.Map<String, Object>> sessionOrderStats();
+
+    /**
+     * 在场（status='FILLED'）且已归属会话的订单：供「一持仓一会话」列表补充持仓明细。
+     * 同一会话多笔在场单时以最末一笔为准（一期为「一次一笔」）。
+     */
+    @Select("SELECT * FROM trade_order WHERE status = 'FILLED' AND session_id IS NOT NULL ORDER BY id")
+    List<TradeOrder> listOpenWithSession();
 }

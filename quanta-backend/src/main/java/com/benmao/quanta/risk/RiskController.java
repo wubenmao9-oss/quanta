@@ -3,6 +3,7 @@ package com.benmao.quanta.risk;
 import com.benmao.quanta.common.Result;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,6 +49,18 @@ public class RiskController {
     @GetMapping("/thresholds")
     public Result<ThresholdsView> thresholds() {
         return Result.ok(new ThresholdsView(riskConfig.thresholds(), riskConfig.runMode()));
+    }
+
+    /**
+     * 保存账户级风控阈值（写 {@code risk_config} 唯一行）。
+     *
+     * <p>含 R6 日亏熔断（{@code maxDailyLoss}，USD）：当日已实现亏损达到该值即禁止开仓，
+     * 自然日 00:00 自动解除。<b>0 不是「关闭」而是「一亏即熔断」</b>，要实质关闭须填一个很大的数。
+     * 入参只需给要改的字段（null = 保持当前值）。
+     */
+    @PutMapping("/thresholds")
+    public Result<ThresholdsView> saveThresholds(@RequestBody RiskConfigService.Patch body) {
+        return Result.ok(new ThresholdsView(riskConfig.saveThresholds(body), riskConfig.runMode()));
     }
 
     /** 校验请求（字符串形式的动作/方向，便于宽容入参并给出可选值回执）。 */

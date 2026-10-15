@@ -106,4 +106,44 @@ class StrategyControllerTest {
                 .andExpect(jsonPath("$.data.approved").value(true));
         verify(service).approve(anyLong(), isNull(), isNull(), isNull());
     }
+
+    @Test
+    @DisplayName("POST /api/strategy/{id}/drill-approve：演练模式未开 → 403")
+    void drillApproveRejectedWhenDisabled() throws Exception {
+        when(service.drillApprove(eq(17L)))
+                .thenThrow(new BizException(ResultCode.BIZ_ERROR.code(), "演练模式未开启", 403));
+
+        mvc.perform(post("/api/strategy/17/drill-approve"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("演练模式未开启"));
+    }
+
+    @Test
+    @DisplayName("POST /api/strategy/{id}/drill-approve：开启后置 DRILL")
+    void drillApproveSuccess() throws Exception {
+        Strategy drill = new Strategy();
+        drill.setId(17L);
+        drill.setStatus("DRILL");
+        drill.setApproved(false);
+        drill.setOrigin("DRILL");
+        when(service.drillApprove(eq(17L))).thenReturn(drill);
+
+        mvc.perform(post("/api/strategy/17/drill-approve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DRILL"))
+                .andExpect(jsonPath("$.data.origin").value("DRILL"));
+    }
+
+    @Test
+    @DisplayName("POST /api/strategy/{id}/drill-revoke：一键回滚为 DRAFT")
+    void drillRevokeSuccess() throws Exception {
+        Strategy draft = new Strategy();
+        draft.setId(17L);
+        draft.setStatus("DRAFT");
+        when(service.drillRevoke(eq(17L))).thenReturn(draft);
+
+        mvc.perform(post("/api/strategy/17/drill-revoke"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+    }
 }

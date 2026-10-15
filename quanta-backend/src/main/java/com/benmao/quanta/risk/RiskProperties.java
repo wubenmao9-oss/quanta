@@ -68,6 +68,26 @@ public class RiskProperties {
     private BigDecimal defaultSpreadLimit = new BigDecimal("50");
     private String defaultSymbolWhitelist = "GOLD";
 
+    // ---------------- GRID 专用档兜底默认（risk_config.grid_* 为空时使用） ----------------
+    // 放宽 R2/R3/R4/R15；R1/R5/R6/R7/R9/R10/R11/R13/R14 两档共用同列（保持硬约束）。
+    // R4（单笔风险 ≤ 净值×maxRiskPct%）必须放宽：马丁单腿的「灾难兜底 SL」距离极大，
+    // 若沿用 DEFAULT 档的 2%，则高腿手数（如 0.16 手 × 5.00USD × 100 = 80USD）会整腿被拒。
+
+    /** GRID 档单笔手数上限默认（须 ≥ 马丁最高腿手数：base×multiplier^(maxLevels-1)）。 */
+    private BigDecimal defaultGridMaxVolume = new BigDecimal("2.00");
+    /** GRID 档最大持仓数默认（须 ≥ 马丁最大腿数）。 */
+    private int defaultGridMaxPositions = 5;
+    /** GRID 档盈亏比地板默认（腿开仓不带 TP，通常不触发 R15）。 */
+    private BigDecimal defaultGridMinRr = new BigDecimal("0.50");
+    /**
+     * GRID 档单笔风险预算默认（占净值百分比，覆盖 R4 的 maxRiskPct）。
+     *
+     * <p>取 25 是给「灾难兜底 SL」留出空间：满 5 腿 0.31 手下最大浮亏约 26USD，
+     * 而 5 腿中最高一腿（0.16 手 × 5.00USD × 100 盎司）= 80USD，需 80/净值 的比例才能不被 R4 拒单。
+     * 真正的净值级保护由锁闸门（单轮/日/总）承担，R4 在此档只作「单腿过大」的粗筛。
+     */
+    private BigDecimal defaultGridMaxRiskPct = new BigDecimal("25.00");
+
     public double getContractSizePerLot() {
         return contractSizePerLot;
     }
@@ -250,5 +270,37 @@ public class RiskProperties {
 
     public void setDefaultSymbolWhitelist(String defaultSymbolWhitelist) {
         this.defaultSymbolWhitelist = defaultSymbolWhitelist;
+    }
+
+    public BigDecimal getDefaultGridMaxVolume() {
+        return defaultGridMaxVolume;
+    }
+
+    public void setDefaultGridMaxVolume(BigDecimal defaultGridMaxVolume) {
+        this.defaultGridMaxVolume = defaultGridMaxVolume;
+    }
+
+    public int getDefaultGridMaxPositions() {
+        return defaultGridMaxPositions;
+    }
+
+    public void setDefaultGridMaxPositions(int defaultGridMaxPositions) {
+        this.defaultGridMaxPositions = defaultGridMaxPositions;
+    }
+
+    public BigDecimal getDefaultGridMinRr() {
+        return defaultGridMinRr;
+    }
+
+    public void setDefaultGridMinRr(BigDecimal defaultGridMinRr) {
+        this.defaultGridMinRr = defaultGridMinRr;
+    }
+
+    public BigDecimal getDefaultGridMaxRiskPct() {
+        return defaultGridMaxRiskPct;
+    }
+
+    public void setDefaultGridMaxRiskPct(BigDecimal defaultGridMaxRiskPct) {
+        this.defaultGridMaxRiskPct = defaultGridMaxRiskPct;
     }
 }

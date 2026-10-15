@@ -27,12 +27,30 @@ public final class StrategyGateEvaluator {
      */
     public static Evaluation evaluate(StrategyProperties.Gate cfg, double targetRr,
                                       Segment full, Segment is, Segment oos) {
+        return evaluate(cfg, targetRr, full, is, oos, "SINGLE_LEG");
+    }
+
+    /**
+     * @param cfg     门禁配置（阈值集中配置）
+     * @param targetRr 策略目标盈亏比 R（胜率判据：胜率 &gt; 1/(1+R)）
+     * @param full    全样本摘要（门禁点差档）
+     * @param is      样本内(A)摘要
+     * @param oos     样本外(B)摘要
+     * @param family  策略族：SINGLE_LEG（单仓口径）或 BASKET（轮级口径，附加 c6/c7）
+     */
+    public static Evaluation evaluate(StrategyProperties.Gate cfg, double targetRr,
+                                      Segment full, Segment is, Segment oos, String family) {
+        boolean basket = "BASKET".equalsIgnoreCase(family);
         List<Criterion> cs = new ArrayList<>();
 
-        boolean c1 = full.tradeCount() >= cfg.getMinTradeCount();
-        cs.add(new Criterion("SAMPLE_SIZE", "最小交易样本量", c1,
-                full.tradeCount() + " 笔", "≥ " + cfg.getMinTradeCount() + " 笔",
-                c1 ? "样本量达标" : "样本不足：仅 " + full.tradeCount() + " 笔，需 ≥ " + cfg.getMinTradeCount() + " 笔"));
+        // c1 样本量：单仓按笔数、多腿/网格按轮数（门禁验收须以「轮」为单位，避免腿数虚高）
+        int sample = basket ? full.cycleCount() : full.tradeCount();
+        int minSample = basket ? cfg.getMinCycles() : cfg.getMinTradeCount();
+        String sampleUnit = basket ? "轮" : "笔";
+        boolean c1 = sample >= minSample;
+        cs.add(new Criterion(basket ? "SAMPLE_SIZE_CYCLES" : "SAMPLE_SIZE", "最小" + sampleUnit + "样本量", c1,
+                sample + " " + sampleUnit, "≥ " + minSample + " " + sampleUnit,
+                c1 ? "样本量达标" : "样本不足：仅 " + sample + " " + sampleUnit + "，需 ≥ " + minSample + " " + sampleUnit));
 
         boolean c2 = full.expectancy() > 0;
         cs.add(new Criterion("SPREAD_EXPECTANCY", cfg.getSpreadPoints() + " 点差档期望为正", c2,
@@ -53,9 +71,23 @@ public final class StrategyGateEvaluator {
 
         double needed = 100.0 / (1.0 + targetRr);
         boolean c5 = full.winRatePct() > needed;
-        cs.add(new Criterion("WINRATE_RR", "胜率 > 1/(1+R)", c5,
+        cs.add(new Criterion("WINRATE_RR", (basket ? "轮" : "") + "胜率 > 1/(1+R)", c5,
                 fmt(full.winRatePct()) + "%", "> " + fmt(needed) + "%（R=" + fmt(targetRr) + "）",
                 c5 ? "胜率与盈亏比匹配" : "胜率不足：需 > " + fmt(needed) + "%（R=" + fmt(targetRr) + "）"));
+
+        // c6/c7 仅多腿/网格（BASKET）：马丁类须额外校验连亏轮与平均档数，避免腿级指标虚高导致门禁失效
+        if (basket) {
+            boolean c6 = full.maxLosingCycles() <= cfg.getMaxLosingCycles();
+            cs.add(new Criterion("MAX_LOSING_CYCLES", "最大连亏轮数≤上限", c6,
+                    full.maxLosingCycles() + " 轮", "≤ " + cfg.getMaxLosingCycles() + " 轮",
+                    c6 ? "连亏轮在阈值内" : "连亏轮超限：" + full.maxLosingCycles() + " > " + cfg.getMaxLosingCycles()));
+
+            boolean c7 = full.avgLevelsPerCycle() <= cfg.getMaxAvgLevels();
+            cs.add(new Criterion("CYCLE_AVG_LEVELS", "平均每轮档数≤上限", c7,
+                    fmt(full.avgLevelsPerCycle()), "≤ " + fmt(cfg.getMaxAvgLevels()),
+                    c7 ? "平均档数在阈值内（未失控加仓）"
+                            : "平均档数超限：" + fmt(full.avgLevelsPerCycle()) + " > " + fmt(cfg.getMaxAvgLevels())));
+        }
 
         boolean passed = cs.stream().allMatch(Criterion::pass);
         return new Evaluation(cs, passed, abConclusion(is, oos),

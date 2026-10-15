@@ -80,7 +80,7 @@ public class RiskGuard {
                     "动作不能为空，可选：OPEN, CLOSE, MODIFY", 400);
         }
         RiskAction action = req.action();
-        RiskThresholds th = riskConfig.thresholds();
+        RiskThresholds th = riskConfig.thresholds(RiskProfile.orDefault(req.profile()));
         String runMode = riskConfig.runMode();
 
         List<RiskViolation> violations = new ArrayList<>();

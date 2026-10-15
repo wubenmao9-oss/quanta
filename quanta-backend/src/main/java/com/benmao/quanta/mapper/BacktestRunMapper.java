@@ -17,10 +17,10 @@ public interface BacktestRunMapper {
 
     @Insert("INSERT INTO backtest_run(strategy_id, symbol, data_timeframe, start_time, end_time, params, "
             + "spread_mode, spread, slippage, swap_on, mode, win_rate, profit_factor, max_drawdown, trade_count, "
-            + "avg_hold_sec, status) "
+            + "avg_hold_sec, cycle_count, max_losing_cycles, avg_levels, status) "
             + "VALUES(#{strategyId}, #{symbol}, #{dataTimeframe}, #{startTime}, #{endTime}, #{params}, "
             + "#{spreadMode}, #{spread}, #{slippage}, #{swapOn}, #{mode}, #{winRate}, #{profitFactor}, "
-            + "#{maxDrawdown}, #{tradeCount}, #{avgHoldSec}, #{status})")
+            + "#{maxDrawdown}, #{tradeCount}, #{avgHoldSec}, #{cycleCount}, #{maxLosingCycles}, #{avgLevels}, #{status})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(BacktestRun e);
 
@@ -35,6 +35,7 @@ public interface BacktestRunMapper {
             + "params = #{params}, spread_mode = #{spreadMode}, spread = #{spread}, slippage = #{slippage}, "
             + "swap_on = #{swapOn}, mode = #{mode}, win_rate = #{winRate}, profit_factor = #{profitFactor}, "
             + "max_drawdown = #{maxDrawdown}, trade_count = #{tradeCount}, avg_hold_sec = #{avgHoldSec}, "
+            + "cycle_count = #{cycleCount}, max_losing_cycles = #{maxLosingCycles}, avg_levels = #{avgLevels}, "
             + "status = #{status} WHERE id = #{id}")
     int update(BacktestRun e);
 

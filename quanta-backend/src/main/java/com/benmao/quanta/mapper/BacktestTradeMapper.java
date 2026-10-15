@@ -16,9 +16,9 @@ import java.util.List;
 public interface BacktestTradeMapper {
 
     @Insert("INSERT INTO backtest_trade(run_id, open_time, close_time, cmd, volume, open_price, close_price, "
-            + "sl, tp, profit, swap, hold_sec) "
+            + "sl, tp, profit, swap, hold_sec, exit_reason, cycle_no, level, engine_kind) "
             + "VALUES(#{runId}, #{openTime}, #{closeTime}, #{cmd}, #{volume}, #{openPrice}, #{closePrice}, "
-            + "#{sl}, #{tp}, #{profit}, #{swap}, #{holdSec})")
+            + "#{sl}, #{tp}, #{profit}, #{swap}, #{holdSec}, #{exitReason}, #{cycleNo}, #{level}, #{engineKind})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(BacktestTrade e);
 
@@ -34,7 +34,8 @@ public interface BacktestTradeMapper {
 
     @Update("UPDATE backtest_trade SET run_id = #{runId}, open_time = #{openTime}, close_time = #{closeTime}, "
             + "cmd = #{cmd}, volume = #{volume}, open_price = #{openPrice}, close_price = #{closePrice}, sl = #{sl}, "
-            + "tp = #{tp}, profit = #{profit}, swap = #{swap}, hold_sec = #{holdSec} WHERE id = #{id}")
+            + "tp = #{tp}, profit = #{profit}, swap = #{swap}, hold_sec = #{holdSec}, exit_reason = #{exitReason}, "
+            + "cycle_no = #{cycleNo}, level = #{level}, engine_kind = #{engineKind} WHERE id = #{id}")
     int update(BacktestTrade e);
 
     @Delete("DELETE FROM backtest_trade WHERE id = #{id}")

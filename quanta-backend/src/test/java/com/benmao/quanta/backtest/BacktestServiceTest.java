@@ -64,8 +64,8 @@ class BacktestServiceTest {
         props.setDefaultSlippage(0);
 
         Clock clock = Clock.fixed(Instant.parse("2026-09-15T00:00:00Z"), ZoneId.of("UTC"));
-        service = new BacktestService(props, klineMapper, runMapper, tradeMapper, strategyMapper,
-                List.of(new EmaAtrRuleStrategy(props)), clock);
+        service = new BacktestService(props, new BasketStrategyProperties(), klineMapper, runMapper, tradeMapper,
+                strategyMapper, List.of(new EmaAtrRuleStrategy(props)), List.of(), clock);
 
         when(runMapper.insert(any(BacktestRun.class))).thenAnswer(inv -> {
             BacktestRun r = inv.getArgument(0);

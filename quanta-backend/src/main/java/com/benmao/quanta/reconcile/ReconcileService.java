@@ -39,7 +39,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>启动认领</b>（{@link #claimExistingPositions()}）：重启后把「MT5 有持仓但本地无流水」的持仓
  *       补建为认领单（status=FILLED、trace_id=CLAIM-&lt;ticket&gt;），杜绝"孤儿持仓"；</li>
  *   <li><b>对账</b>（{@link #reconcile()}）：用 MT5 成交历史核对 {@code trade_order}，
- *       差异<b>只报告</b>（落 operation_audit + 告警），<b>绝不改账</b>。</li>
+ *       差异<b>只报告</b>（落 operation_audit + 告警），<b>绝不改账</b>；</li>
+ *   <li><b>平仓回写修复</b>（{@link #repairClosedFromDeals()}）：券商侧已触发平仓（成交历史里有 OUT 成交）
+ *       但本地仍为 FILLED 时，据 MT5 真实成交回写为 CLOSED，杜绝「本地幽灵持仓」（定时对账自动执行）。</li>
  * </ol>
  */
 @Service
@@ -228,6 +230,62 @@ public class ReconcileService {
         return new ReconcileReport(from, to, deals.size(), diffs);
     }
 
+    /**
+     * 平仓回写修复：当 MT5 成交历史里存在某持仓的 OUT（平仓）成交，而本地 {@code trade_order}
+     * 仍为 FILLED 时，据 MT5 的真实成交回写为 CLOSED（平仓价 / 盈亏 / 掉期 / 平仓时间），
+     * 修复「券商已平仓但本地仍显示在场」导致的状态漂移与盈亏统计失真。
+     *
+     * <p>只依据成交历史（不做「本地有单、券商无持仓」的推断），因此不会误杀真正的在场单。
+     *
+     * @return 本次回写的 ticket 列表
+     */
+    public List<Long> repairClosedFromDeals() {
+        Instant now = clock.instant();
+        long toEpoch = now.getEpochSecond();
+        long fromEpoch = now.minusSeconds(Math.max(1, props.getLookbackHours()) * 3600L).getEpochSecond();
+
+        List<Deal> deals = bridge.historyDeals(fromEpoch, toEpoch);
+        if (deals == null || deals.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, List<Deal>> byTicket = new LinkedHashMap<>();
+        for (Deal d : deals) {
+            if (d.positionId() > 0) {
+                byTicket.computeIfAbsent(d.positionId(), k -> new ArrayList<>()).add(d);
+            }
+        }
+
+        List<Long> repaired = new ArrayList<>();
+        for (Map.Entry<Long, List<Deal>> en : byTicket.entrySet()) {
+            long ticket = en.getKey();
+            List<Deal> outs = en.getValue().stream().filter(d -> d.entry() == DEAL_ENTRY_OUT).toList();
+            if (outs.isEmpty()) {
+                continue;
+            }
+            TradeOrder local = tradeOrderMapper.findLatestByTicket(ticket);
+            if (local == null || "CLOSED".equalsIgnoreCase(local.getStatus())) {
+                continue;
+            }
+            double profit = outs.stream().mapToDouble(Deal::profit).sum();
+            double swap = outs.stream().mapToDouble(Deal::swap).sum();
+            Deal last = outs.get(outs.size() - 1);
+
+            local.setStatus("CLOSED");
+            local.setClosePrice(BigDecimal.valueOf(last.price()));
+            local.setProfit(BigDecimal.valueOf(profit));
+            local.setSwap(BigDecimal.valueOf(swap));
+            local.setCloseTime(parseTime(last.time()));
+            tradeOrderMapper.update(local);
+
+            auditService.write(props.getAuditOperator(), "REPAIR_CLOSE", String.valueOf(ticket),
+                    "status=FILLED", "CLOSED:profit=" + round(profit), local.getTraceId());
+            repaired.add(ticket);
+            log.warn("对账回写：ticket={} 券商已平仓，本地 FILLED → CLOSED（profit={}, swap={}）",
+                    ticket, round(profit), round(swap));
+        }
+        return repaired;
+    }
+
     /** 定时对账（cron 由 {@code quanta.reconcile.cron} 决定）；失败只记日志。 */
     @Scheduled(cron = "${quanta.reconcile.cron:0 */5 * * * *}")
     public void scheduledReconcile() {
@@ -236,6 +294,10 @@ public class ReconcileService {
         }
         try {
             reconcile();
+            List<Long> repaired = repairClosedFromDeals();
+            if (!repaired.isEmpty()) {
+                alertService.reconcileDiff("自动回写平仓 " + repaired.size() + " 笔：" + repaired);
+            }
         } catch (RuntimeException e) {
             log.warn("定时对账失败（已忽略）：{}", e.getMessage());
         }

@@ -2,6 +2,7 @@ package com.benmao.quanta.trade;
 
 import com.benmao.quanta.risk.RiskAction;
 import com.benmao.quanta.risk.RiskOrigin;
+import com.benmao.quanta.risk.RiskProfile;
 import com.benmao.quanta.risk.RiskSide;
 
 import java.math.BigDecimal;
@@ -24,6 +25,7 @@ import java.math.BigDecimal;
  * @param planId    交易计划 id（可空）
  * @param traceId   追踪号（R8 幂等用；空则由 Java 生成）
  * @param origin    发起来源（M13：AI 自主 / MANUAL 人工；仅影响 R11 三态判定）
+ * @param profile   风控档位（默认 {@link RiskProfile#DEFAULT}；多腿/马丁执行器传 {@link RiskProfile#GRID}）
  */
 public record TradeCommand(RiskAction action,
                            String symbol,
@@ -37,18 +39,28 @@ public record TradeCommand(RiskAction action,
                            Long sessionId,
                            Long planId,
                            String traceId,
-                           RiskOrigin origin) {
+                           RiskOrigin origin,
+                           RiskProfile profile) {
 
-    /** 兼容构造：默认 {@link RiskOrigin#AI}。 */
+    /** 兼容构造：默认 {@link RiskOrigin#AI}（默认档）。 */
     public TradeCommand(RiskAction action, String symbol, RiskSide side, BigDecimal volume, BigDecimal price,
                         BigDecimal sl, BigDecimal tp, String tpMode, Long ticket, Long sessionId, Long planId,
                         String traceId) {
-        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, planId, traceId, RiskOrigin.AI);
+        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, planId, traceId,
+                RiskOrigin.AI, RiskProfile.DEFAULT);
+    }
+
+    /** 兼容构造：默认 {@link RiskProfile#DEFAULT}。 */
+    public TradeCommand(RiskAction action, String symbol, RiskSide side, BigDecimal volume, BigDecimal price,
+                        BigDecimal sl, BigDecimal tp, String tpMode, Long ticket, Long sessionId, Long planId,
+                        String traceId, RiskOrigin origin) {
+        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, planId, traceId,
+                origin, RiskProfile.DEFAULT);
     }
 
     /** 复制命令并替换来源（人工路径置 {@link RiskOrigin#MANUAL}）。 */
     public TradeCommand withOrigin(RiskOrigin newOrigin) {
         return new TradeCommand(action, symbol, side, volume, price, sl, tp, tpMode,
-                ticket, sessionId, planId, traceId, newOrigin);
+                ticket, sessionId, planId, traceId, newOrigin, profile);
     }
 }

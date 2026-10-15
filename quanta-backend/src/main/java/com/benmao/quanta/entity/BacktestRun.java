@@ -23,6 +23,12 @@ public class BacktestRun {
     private BigDecimal maxDrawdown;
     private Integer tradeCount;
     private Integer avgHoldSec;
+    /** 轮级口径：轮数（多腿策略=轮数；单仓策略=成交笔数）。 */
+    private Integer cycleCount;
+    /** 最长连续净亏轮数（轮级风控判据 c6 用）。 */
+    private Integer maxLosingCycles;
+    /** 平均每轮档数（多腿策略用；单仓策略=1.00）。 */
+    private BigDecimal avgLevels;
     private String status;
     private LocalDateTime createTime;
 
@@ -160,6 +166,30 @@ public class BacktestRun {
 
     public void setAvgHoldSec(Integer avgHoldSec) {
         this.avgHoldSec = avgHoldSec;
+    }
+
+    public Integer getCycleCount() {
+        return cycleCount;
+    }
+
+    public void setCycleCount(Integer cycleCount) {
+        this.cycleCount = cycleCount;
+    }
+
+    public Integer getMaxLosingCycles() {
+        return maxLosingCycles;
+    }
+
+    public void setMaxLosingCycles(Integer maxLosingCycles) {
+        this.maxLosingCycles = maxLosingCycles;
+    }
+
+    public BigDecimal getAvgLevels() {
+        return avgLevels;
+    }
+
+    public void setAvgLevels(BigDecimal avgLevels) {
+        this.avgLevels = avgLevels;
     }
 
     public String getStatus() {

@@ -1,10 +1,16 @@
 package com.benmao.quanta.strategy;
 
+import com.benmao.quanta.backtest.BasketStrategy;
+import com.benmao.quanta.backtest.BasketStrategyProperties;
 import com.benmao.quanta.backtest.RuleStrategy;
 import com.benmao.quanta.common.exception.BizException;
 import com.benmao.quanta.entity.Strategy;
 import com.benmao.quanta.mapper.StrategyMapper;
+import com.benmao.quanta.strategy.rule.BenmaoGoldRuleStrategy;
+import com.benmao.quanta.strategy.rule.BenmaoMartinGridRuleStrategy;
 import com.benmao.quanta.strategy.rule.RangeRsiBollRuleStrategy;
+import com.benmao.quanta.strategy.rule.ScalpEmaRuleStrategy;
+import com.benmao.quanta.strategy.rule.TinyScalpRuleStrategy;
 import com.benmao.quanta.strategy.rule.TrendEmaAdxRuleStrategy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,25 +43,29 @@ class StrategyCatalogServiceTest {
     void setUp() {
         mapper = mock(StrategyMapper.class);
         StrategyProperties props = new StrategyProperties();
-        List<RuleStrategy> rules = List.of(new TrendEmaAdxRuleStrategy(props), new RangeRsiBollRuleStrategy(props));
-        svc = new StrategyCatalogService(props, mapper, rules, new ObjectMapper());
+        List<RuleStrategy> rules = List.of(new TrendEmaAdxRuleStrategy(props), new RangeRsiBollRuleStrategy(props),
+                new ScalpEmaRuleStrategy(props), new TinyScalpRuleStrategy(props), new BenmaoGoldRuleStrategy(props));
+        BasketStrategyProperties basketProps = new BasketStrategyProperties();
+        List<BasketStrategy> baskets = List.of(new BenmaoMartinGridRuleStrategy(basketProps));
+        svc = new StrategyCatalogService(props, basketProps, mapper, rules, baskets,
+                new ObjectMapper());
     }
 
     @Test
-    @DisplayName("首次导入：两策略均以 DRAFT 落库，含 regime/target_rr/indicator_params/prompt")
+    @DisplayName("首次导入：六策略均以 DRAFT 落库，含 regime/target_rr/indicator_params/prompt")
     void importsBothAsDraft() {
         when(mapper.findByNameVersion(anyString(), anyInt())).thenReturn(null);
 
         List<Strategy> out = svc.ensureImported();
 
-        assertEquals(2, out.size());
-        verify(mapper, times(2)).insert(any(Strategy.class));
+        assertEquals(6, out.size());
+        verify(mapper, times(6)).insert(any(Strategy.class));
         verify(mapper, never()).update(any(Strategy.class));
         for (Strategy s : out) {
             assertEquals("DRAFT", s.getStatus());
             assertFalse(s.getApproved());
             assertEquals("MANUAL", s.getOrigin());
-            assertTrue(s.getRegimeType().equals("TREND") || s.getRegimeType().equals("RANGE"));
+            assertTrue(List.of("TREND", "RANGE", "SCALP").contains(s.getRegimeType()));
             assertTrue(s.getTargetRr().compareTo(BigDecimal.ZERO) > 0);
             assertTrue(s.getIndicatorParams().contains("ruleKey"));
             assertTrue(s.getPrompt().contains("GOLD"));
@@ -71,11 +81,15 @@ class StrategyCatalogServiceTest {
         active.setTargetRr(BigDecimal.valueOf(9.99));
         when(mapper.findByNameVersion(StrategyCatalogService.NAME_TREND, 1)).thenReturn(active);
         when(mapper.findByNameVersion(StrategyCatalogService.NAME_RANGE, 1)).thenReturn(null);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_SCALP, 1)).thenReturn(null);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_TINY, 1)).thenReturn(null);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_BENMAO_GOLD, 1)).thenReturn(null);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_MARTIN_GRID, 1)).thenReturn(null);
 
         List<Strategy> out = svc.ensureImported();
 
-        assertEquals(2, out.size());
-        verify(mapper, times(1)).insert(any(Strategy.class));   // 仅震荡新建
+        assertEquals(6, out.size());
+        verify(mapper, times(5)).insert(any(Strategy.class));   // 仅震荡 + 两个演练策略 + 笨猫黄金 + 马丁网格新建
         verify(mapper, never()).update(any(Strategy.class));     // 趋势不被覆盖
         assertTrue(out.stream().anyMatch(s -> "ACTIVE".equals(s.getStatus())));
     }
@@ -89,13 +103,29 @@ class StrategyCatalogServiceTest {
         Strategy r = new Strategy();
         r.setName(StrategyCatalogService.NAME_RANGE);
         r.setStatus("DRAFT");
+        Strategy sc = new Strategy();
+        sc.setName(StrategyCatalogService.NAME_SCALP);
+        sc.setStatus("DRAFT");
+        Strategy ti = new Strategy();
+        ti.setName(StrategyCatalogService.NAME_TINY);
+        ti.setStatus("DRAFT");
+        Strategy bgold = new Strategy();
+        bgold.setName(StrategyCatalogService.NAME_BENMAO_GOLD);
+        bgold.setStatus("DRAFT");
+        Strategy mgrid = new Strategy();
+        mgrid.setName(StrategyCatalogService.NAME_MARTIN_GRID);
+        mgrid.setStatus("DRAFT");
         when(mapper.findByNameVersion(StrategyCatalogService.NAME_TREND, 1)).thenReturn(t);
         when(mapper.findByNameVersion(StrategyCatalogService.NAME_RANGE, 1)).thenReturn(r);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_SCALP, 1)).thenReturn(sc);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_TINY, 1)).thenReturn(ti);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_BENMAO_GOLD, 1)).thenReturn(bgold);
+        when(mapper.findByNameVersion(StrategyCatalogService.NAME_MARTIN_GRID, 1)).thenReturn(mgrid);
 
         svc.ensureImported();
 
         verify(mapper, never()).insert(any(Strategy.class));
-        verify(mapper, times(2)).update(any(Strategy.class));
+        verify(mapper, times(6)).update(any(Strategy.class));
     }
 
     @Test
@@ -108,6 +138,18 @@ class StrategyCatalogServiceTest {
         Strategy r = new Strategy();
         r.setName(StrategyCatalogService.NAME_RANGE);
         assertEquals(RangeRsiBollRuleStrategy.KEY, svc.ruleKeyOf(r));
+
+        Strategy sc = new Strategy();
+        sc.setName(StrategyCatalogService.NAME_SCALP);
+        assertEquals(ScalpEmaRuleStrategy.KEY, svc.ruleKeyOf(sc));
+
+        Strategy ti = new Strategy();
+        ti.setName(StrategyCatalogService.NAME_TINY);
+        assertEquals(TinyScalpRuleStrategy.KEY, svc.ruleKeyOf(ti));
+
+        Strategy bgold = new Strategy();
+        bgold.setName(StrategyCatalogService.NAME_BENMAO_GOLD);
+        assertEquals(BenmaoGoldRuleStrategy.KEY, svc.ruleKeyOf(bgold));
 
         Strategy bad = new Strategy();
         bad.setName("不存在");

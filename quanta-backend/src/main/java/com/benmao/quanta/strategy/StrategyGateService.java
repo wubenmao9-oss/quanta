@@ -72,6 +72,7 @@ public class StrategyGateService {
                     "策略未配置合法 target_rr：name=" + s.getName(), 400);
         }
         double targetRr = s.getTargetRr().doubleValue();
+        String family = catalog.familyOfRuleKey(ruleKey);
 
         StrategyProperties.Gate cfg = props.getGate();
         String sym = (symbol == null || symbol.isBlank()) ? backtestProps.getSymbol() : symbol.trim();
@@ -83,14 +84,15 @@ public class StrategyGateService {
         Segment is = runSegment(sym, tf, range.from(), split, cfg, ruleKey, strategyId);
         Segment oos = runSegment(sym, tf, split, range.to(), cfg, ruleKey, strategyId);
 
-        StrategyGateEvaluator.Evaluation ev = StrategyGateEvaluator.evaluate(cfg, targetRr, full, is, oos);
+        StrategyGateEvaluator.Evaluation ev = StrategyGateEvaluator.evaluate(cfg, targetRr, full, is, oos, family);
 
         // 留痕：把回测胜率写回策略（expected_win_rate）
         s.setExpectedWinRate(BigDecimal.valueOf(full.winRatePct()));
         strategyMapper.update(s);
 
-        log.info("门禁评估：strategyId={}, name={}, passed={}, full(trades={}, exp={}), oos(exp={})",
-                strategyId, s.getName(), ev.passed(), full.tradeCount(), full.expectancy(), oos.expectancy());
+        log.info("门禁评估：strategyId={}, name={}, family={}, passed={}, full(cycles={}, trades={}, exp={}), oos(exp={})",
+                strategyId, s.getName(), family, ev.passed(), full.cycleCount(), full.tradeCount(),
+                full.expectancy(), oos.expectancy());
 
         return new StrategyGateReport(strategyId, s.getName(), ruleKey, sym, tf, s.getRegimeType(), targetRr,
                 range.from(), range.to(), split, cfg.getInSampleRatio(), cfg.getSpreadPoints(), cfg.getSlippagePoints(),
@@ -131,16 +133,59 @@ public class StrategyGateService {
         return s;
     }
 
+    // ==================== 演练模式（绕过门禁，仅用于验证 AI 是否真的会下单） ====================
+
+    /**
+     * 演练上线：<b>绕过门禁</b>把策略置为 {@code DRILL}，仅供「演练模式」验证决策链路能否真实下单。
+     *
+     * <p>安全约束：必须显式开启 {@code quanta.strategy.gate.drill-enabled}（默认关）才允许；否则 403 拒绝。
+     * DRILL 策略<b>不</b>满足门禁（预期期望为负），严禁用于实盘资金；{@link #drillRevoke(long)} 可一键回滚。
+     */
+    public Strategy drillApprove(long strategyId) {
+        if (!props.getGate().isDrillEnabled()) {
+            throw new BizException(ResultCode.BIZ_ERROR.code(),
+                    "演练模式未开启（quanta.strategy.gate.drill-enabled=false），拒绝绕过门禁上线；"
+                            + "请先显式开启该开关后重试", 403);
+        }
+        Strategy s = strategyMapper.getById(strategyId);
+        if (s == null) {
+            throw new BizException(ResultCode.PARAM_ERROR.code(), "策略不存在：id=" + strategyId, 404);
+        }
+        s.setStatus("DRILL");
+        s.setApproved(false);
+        s.setOrigin("DRILL");
+        strategyMapper.update(s);
+        log.warn("!!! 演练策略已上线（绕过门禁，仅用于验证 AI 能否真实下单，禁止用于实盘资金）："
+                + "strategyId={}, name={}", strategyId, s.getName());
+        return s;
+    }
+
+    /** 演练回滚：把 {@code DRILL} 策略退回 {@code DRAFT}（一键回滚，不需要开启演练开关）。 */
+    public Strategy drillRevoke(long strategyId) {
+        Strategy s = strategyMapper.getById(strategyId);
+        if (s == null) {
+            throw new BizException(ResultCode.PARAM_ERROR.code(), "策略不存在：id=" + strategyId, 404);
+        }
+        s.setStatus("DRAFT");
+        s.setApproved(false);
+        s.setOrigin("MANUAL");
+        strategyMapper.update(s);
+        log.info("演练策略已回滚为 DRAFT（不再用于研判）：strategyId={}, name={}", strategyId, s.getName());
+        return s;
+    }
+
     // ==================== 内部实现 ====================
 
     private Segment runSegment(String symbol, String timeframe, LocalDateTime from, LocalDateTime to,
                                StrategyProperties.Gate cfg, String ruleKey, long strategyId) {
         BacktestReport r = backtest.run(new BacktestService.RunSpec(symbol, timeframe,
-                from.toString(), to.toString(), cfg.getSpreadPoints(), cfg.getSlippagePoints(), ruleKey, strategyId));
-        double ddPct = backtestProps.getInitialEquity() <= 0 ? 0
-                : round2(r.maxDrawdown() / backtestProps.getInitialEquity() * 100.0);
+                from.toString(), to.toString(), cfg.getSpreadPoints(), cfg.getSlippagePoints(), ruleKey, strategyId,
+                cfg.getInitialEquity()));
+        double base = cfg.getInitialEquity() <= 0 ? backtestProps.getInitialEquity() : cfg.getInitialEquity();
+        double ddPct = base <= 0 ? 0 : round2(r.maxDrawdown() / base * 100.0);
         return new Segment(r.runId(), r.tradeCount(), r.winRatePct(), r.profitFactor(),
-                round2(r.maxDrawdown()), ddPct, r.netProfit(), r.expectancy());
+                round2(r.maxDrawdown()), ddPct, r.netProfit(), r.expectancy(),
+                r.cycleCount(), r.maxLosingCycles(), r.avgLevels());
     }
 
     private Range resolveRange(String symbol, String timeframe, String from, String to) {

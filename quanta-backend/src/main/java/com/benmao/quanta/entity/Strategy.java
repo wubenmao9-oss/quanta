@@ -19,6 +19,8 @@ public class Strategy {
     private BigDecimal expectedWinRate;
     private String indicatorParams;
     private String description;
+    /** 策略族（SINGLE_LEG/BASKET）：非表字段，由目录服务按规则键回填，供前端展示族标签。 */
+    private String family;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 
@@ -124,6 +126,14 @@ public class Strategy {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public String getFamily() {
+        return family;
+    }
+
+    public void setFamily(String family) {
+        this.family = family;
     }
 
     public LocalDateTime getCreateTime() {

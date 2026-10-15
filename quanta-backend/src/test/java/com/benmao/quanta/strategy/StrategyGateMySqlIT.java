@@ -10,8 +10,13 @@ import com.benmao.quanta.mapper.MarketKlineMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
 import com.benmao.quanta.strategy.StrategyGateReport.Criterion;
 import com.benmao.quanta.strategy.StrategyGateReport.Segment;
+import com.benmao.quanta.strategy.rule.BenmaoGoldRuleStrategy;
 import com.benmao.quanta.strategy.rule.RangeRsiBollRuleStrategy;
+import com.benmao.quanta.strategy.rule.ScalpEmaRuleStrategy;
+import com.benmao.quanta.strategy.rule.TinyScalpRuleStrategy;
 import com.benmao.quanta.strategy.rule.TrendEmaAdxRuleStrategy;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -21,7 +26,9 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -33,13 +40,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * M9 策略门禁真库集成测试：真实落 {@code market_kline} → 幂等导入首批两策略（DRAFT）
  * → 跑「全样本/样本内/样本外」三段回测 → 门禁回执 → <b>未经门禁通过禁止 approve 置 ACTIVE</b>。
  *
+ * <p><b>共享库安全</b>：目录策略用固定 (name, version=1)，线上可能已是 ACTIVE/DRILL。
+ * 故本用例在每个用例前<b>快照</b>这三行并临时置为 DRAFT 以保证断言确定，用例后<b>原样还原</b>
+ * （状态/批准/参数），<b>绝不删除或覆盖</b>线上策略行 —— 避免真库 IT 误伤运行中的策略。
+ *
  * <p>默认不执行；需真库时：
- * {@code $env:RUN_DB_IT='true'; mvn -pl quanta-backend -am test -Dtest=StrategyGateMySqlIT "-Dsurefire.failIfNoSpecifiedTests=true"}
+ * {@code $env:RUN_DB_IT='true'; mvn -pl quanta-backend -am test -Dtest=StrategyGateMySqlIT "-Dsurefire.failIfNoSpecifiedTests=false"}
  */
 @SpringBootTest
 @ActiveProfiles("test")
 @EnabledIfEnvironmentVariable(named = "RUN_DB_IT", matches = "true")
 class StrategyGateMySqlIT {
+
+    /** 目录策略固定名（唯一键 (name, version=1)）。 */
+    private static final List<String> CATALOG_NAMES = List.of(
+            StrategyCatalogService.NAME_TREND, StrategyCatalogService.NAME_RANGE, StrategyCatalogService.NAME_SCALP,
+            StrategyCatalogService.NAME_TINY, StrategyCatalogService.NAME_BENMAO_GOLD);
 
     @Autowired
     private StrategyGateService gateService;
@@ -62,40 +78,100 @@ class StrategyGateMySqlIT {
     @Autowired
     private BacktestTradeMapper tradeMapper;
 
-    @Test
-    @DisplayName("幂等导入首批两策略（趋势+震荡）为 DRAFT：字段齐备、(name,version) 不重复")
-    void importsBothStrategiesAsDraftIdempotently() {
-        try {
-            List<Strategy> first = catalog.ensureImported();
-            List<Strategy> second = catalog.ensureImported();
+    /** 用例前的目录策略快照（name → 行），用于用例后原样还原。 */
+    private final Map<String, Strategy> catalogSnapshot = new LinkedHashMap<>();
 
-            assertEquals(2, first.size(), "应导入趋势+震荡两份策略");
-            assertEquals(2, second.size(), "再次导入应仍为两份");
-            assertEquals(ids(first), ids(second), "幂等：二次导入不应新增行，id 应稳定");
-
-            Strategy trend = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_TREND, 1);
-            Strategy range = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_RANGE, 1);
-            assertNotNull(trend, "趋势策略应已落库");
-            assertNotNull(range, "震荡策略应已落库");
-
-            assertEquals("DRAFT", trend.getStatus(), "初始状态必须为 DRAFT（未经批准不得上线）");
-            assertFalse(trend.getApproved(), "初始 approved 必须为 false");
-            assertEquals("TREND", trend.getRegimeType());
-            assertTrue(trend.getTargetRr().doubleValue() > 0, "target_rr 应为正");
-            assertTrue(trend.getPrompt().contains("趋势"), "Prompt 应含趋势语义");
-            assertTrue(trend.getIndicatorParams().contains(TrendEmaAdxRuleStrategy.KEY),
-                    "indicator_params 应含规则键");
-
-            assertEquals("DRAFT", range.getStatus());
-            assertEquals("RANGE", range.getRegimeType());
-            assertTrue(range.getTargetRr().doubleValue() > 0);
-            assertTrue(range.getIndicatorParams().contains(RangeRsiBollRuleStrategy.KEY));
-
-            assertEquals(1, countByName(StrategyCatalogService.NAME_TREND), "唯一键应防止重复");
-            assertEquals(1, countByName(StrategyCatalogService.NAME_RANGE), "唯一键应防止重复");
-        } finally {
-            deleteCatalogRows();
+    @BeforeEach
+    void snapshotAndNeutralizeCatalog() {
+        catalogSnapshot.clear();
+        for (String name : CATALOG_NAMES) {
+            catalogSnapshot.put(name, strategyMapper.findByNameVersion(name, 1));
         }
+        // 保证目录策略存在且为 DRAFT（断言确定）；线上原值由 @AfterEach 还原
+        for (Strategy s : catalog.ensureImported()) {
+            if (!"DRAFT".equals(s.getStatus())) {
+                s.setStatus("DRAFT");
+                s.setApproved(false);
+                strategyMapper.update(s);
+            }
+        }
+    }
+
+    @AfterEach
+    void restoreCatalog() {
+        for (String name : CATALOG_NAMES) {
+            Strategy original = catalogSnapshot.get(name);
+            Strategy current = strategyMapper.findByNameVersion(name, 1);
+            if (original == null) {
+                if (current != null) {
+                    strategyMapper.deleteById(current.getId()); // 用例新建的行 → 删除
+                }
+                continue;
+            }
+            if (current == null) {
+                Strategy copy = copyOf(original);
+                copy.setId(null);
+                strategyMapper.insert(copy); // 极端情况：行被删 → 以新 id 重建
+            } else {
+                copyState(original, current);
+                strategyMapper.update(current); // 还原线上原值（状态/批准/参数）
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("幂等导入首批四策略（趋势+震荡+两个演练高频）为 DRAFT：字段齐备、(name,version) 不重复")
+    void importsBothStrategiesAsDraftIdempotently() {
+        List<Strategy> first = catalog.ensureImported();
+        List<Strategy> second = catalog.ensureImported();
+
+        assertEquals(5, first.size(), "应导入趋势+震荡+两个演练高频+笨猫黄金五份策略");
+        assertEquals(5, second.size(), "再次导入应仍为五份");
+        assertEquals(ids(first), ids(second), "幂等：二次导入不应新增行，id 应稳定");
+
+        Strategy trend = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_TREND, 1);
+        Strategy range = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_RANGE, 1);
+        Strategy scalp = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_SCALP, 1);
+        Strategy tiny = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_TINY, 1);
+        assertNotNull(trend, "趋势策略应已落库");
+        assertNotNull(range, "震荡策略应已落库");
+        assertNotNull(scalp, "演练高频策略应已落库");
+        assertNotNull(tiny, "演练高频薅点策略应已落库");
+
+        assertEquals("DRAFT", trend.getStatus(), "初始状态必须为 DRAFT（未经批准不得上线）");
+        assertFalse(trend.getApproved(), "初始 approved 必须为 false");
+        assertEquals("TREND", trend.getRegimeType());
+        assertTrue(trend.getTargetRr().doubleValue() > 0, "target_rr 应为正");
+        assertTrue(trend.getPrompt().contains("趋势"), "Prompt 应含趋势语义");
+        assertTrue(trend.getIndicatorParams().contains(TrendEmaAdxRuleStrategy.KEY),
+                "indicator_params 应含规则键");
+
+        assertEquals("DRAFT", range.getStatus());
+        assertEquals("RANGE", range.getRegimeType());
+        assertTrue(range.getTargetRr().doubleValue() > 0);
+        assertTrue(range.getIndicatorParams().contains(RangeRsiBollRuleStrategy.KEY));
+
+        assertEquals("DRAFT", scalp.getStatus(), "演练策略初始也必须是 DRAFT（需显式开启演练模式才可置 DRILL）");
+        assertEquals("SCALP", scalp.getRegimeType());
+        assertTrue(scalp.getIndicatorParams().contains(ScalpEmaRuleStrategy.KEY));
+
+        assertEquals("DRAFT", tiny.getStatus(), "演练薅点策略初始也必须是 DRAFT");
+        assertEquals("SCALP", tiny.getRegimeType());
+        assertTrue(tiny.getIndicatorParams().contains(TinyScalpRuleStrategy.KEY));
+
+        Strategy bgold = strategyMapper.findByNameVersion(StrategyCatalogService.NAME_BENMAO_GOLD, 1);
+        assertNotNull(bgold, "笨猫黄金策略应已落库");
+        assertEquals("DRAFT", bgold.getStatus(), "笨猫黄金初始必须是 DRAFT（未经批准不得上线）");
+        assertEquals("TREND", bgold.getRegimeType());
+        assertTrue(bgold.getTargetRr().doubleValue() > 0, "target_rr 应为正");
+        assertTrue(bgold.getIndicatorParams().contains(BenmaoGoldRuleStrategy.KEY),
+                "indicator_params 应含规则键");
+
+        assertEquals(1, countByName(StrategyCatalogService.NAME_TREND), "唯一键应防止重复");
+        assertEquals(1, countByName(StrategyCatalogService.NAME_RANGE), "唯一键应防止重复");
+        assertEquals(1, countByName(StrategyCatalogService.NAME_SCALP), "唯一键应防止重复");
+        assertEquals(1, countByName(StrategyCatalogService.NAME_TINY), "唯一键应防止重复");
+        assertEquals(1, countByName(StrategyCatalogService.NAME_BENMAO_GOLD), "唯一键应防止重复");
     }
 
     @Test
@@ -141,7 +217,6 @@ class StrategyGateMySqlIT {
         } finally {
             cleanupRuns(runIds);
             cleanupBars(symbol, base, count);
-            deleteCatalogRows();
         }
     }
 
@@ -179,7 +254,6 @@ class StrategyGateMySqlIT {
         } finally {
             cleanupRuns(runIds);
             cleanupBars(symbol, base, count);
-            deleteCatalogRows();
         }
     }
 
@@ -215,7 +289,6 @@ class StrategyGateMySqlIT {
             props.getGate().setMinTradeCount(originalMin);
             cleanupRuns(runIds);
             cleanupBars(symbol, base, count);
-            deleteCatalogRows();
         }
     }
 
@@ -279,12 +352,24 @@ class StrategyGateMySqlIT {
                 .stream().map(MarketKline::getId).forEach(klineMapper::deleteById);
     }
 
-    private void deleteCatalogRows() {
-        for (String name : List.of(StrategyCatalogService.NAME_TREND, StrategyCatalogService.NAME_RANGE)) {
-            Strategy s = strategyMapper.findByNameVersion(name, 1);
-            if (s != null) {
-                strategyMapper.deleteById(s.getId());
-            }
-        }
+    private static Strategy copyOf(Strategy s) {
+        Strategy c = new Strategy();
+        copyState(s, c);
+        return c;
+    }
+
+    private static void copyState(Strategy from, Strategy to) {
+        to.setName(from.getName());
+        to.setPrompt(from.getPrompt());
+        to.setVersion(from.getVersion());
+        to.setStatus(from.getStatus());
+        to.setParentId(from.getParentId());
+        to.setOrigin(from.getOrigin());
+        to.setApproved(from.getApproved());
+        to.setRegimeType(from.getRegimeType());
+        to.setTargetRr(from.getTargetRr());
+        to.setExpectedWinRate(from.getExpectedWinRate());
+        to.setIndicatorParams(from.getIndicatorParams());
+        to.setDescription(from.getDescription());
     }
 }

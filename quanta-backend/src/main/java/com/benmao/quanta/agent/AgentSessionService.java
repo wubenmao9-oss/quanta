@@ -74,6 +74,25 @@ public class AgentSessionService {
         return s.getId();
     }
 
+    /**
+     * 绑定会话与持仓 ticket：开仓成功后建立「一持仓一会话」归属，
+     * 并保持会话存活至该持仓了结（由持仓生命周期对账负责关闭）。
+     */
+    public void linkTicket(Long sessionId, Long ticket) {
+        if (sessionId == null || ticket == null) {
+            return;
+        }
+        AgentSession s = mapper.getById(sessionId);
+        if (s == null) {
+            return;
+        }
+        s.setLinkedTicket(ticket);
+        s.setStatus("ACTIVE");
+        s.setCloseTime(null);
+        mapper.update(s);
+        log.info("会话已绑定持仓: session={}, ticket={}", sessionId, ticket);
+    }
+
     /** 关闭会话（M11 会用；此处提供最小能力）。 */
     public void close(Long sessionId) {
         AgentSession s = mapper.getById(sessionId);

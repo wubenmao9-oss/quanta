@@ -5,14 +5,11 @@ import com.benmao.quanta.risk.RiskSide;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.DayOfWeek;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * 事件驱动重放引擎（设计 §13.1）：逐根 K 线推进，<b>复用实盘同一套</b>规则策略。
@@ -31,10 +28,12 @@ public class ReplayEngine {
 
     private final BacktestProperties props;
     private final ZoneId zone;
+    private final SwapModel swapModel;
 
     public ReplayEngine(BacktestProperties props, ZoneId zone) {
         this.props = props;
         this.zone = zone;
+        this.swapModel = new SwapModel(props, zone);
     }
 
     /**
@@ -46,18 +45,32 @@ public class ReplayEngine {
      * @param slippagePoints  滑点（points）
      */
     public EngineResult run(List<KlineBar> bars, RuleRunner runner, double spreadPoints, double slippagePoints) {
+        return run(bars, runner, spreadPoints, slippagePoints, props.getInitialEquity());
+    }
+
+    /**
+     * 跑一遍回测（可覆盖初始权益，供门禁按账户规模口径回测；默认走 {@link BacktestProperties#getInitialEquity()}）。
+     *
+     * @param bars            历史 K 线（按时间升序）
+     * @param runner          有状态规则实例（每次回测独立）
+     * @param spreadPoints    点差（points）
+     * @param slippagePoints  滑点（points）
+     * @param initialEquity   初始权益（USD）
+     */
+    public EngineResult run(List<KlineBar> bars, RuleRunner runner, double spreadPoints, double slippagePoints,
+                            double initialEquity) {
         double point = props.getPoint();
         double contractSize = props.getContractSizePerLot();
         double volume = props.getVolume();
         CostModel cost = new CostModel(point, spreadPoints, slippagePoints, props.getSpreadSideFactor());
 
         List<ClosedTrade> trades = new ArrayList<>();
-        double equity = props.getInitialEquity();
+        double equity = initialEquity;
         double peak = equity;
         double maxDrawdown = 0;
 
         if (bars == null || bars.isEmpty()) {
-            return new EngineResult(List.of(), props.getInitialEquity(), equity, 0);
+            return new EngineResult(List.of(), initialEquity, equity, 0);
         }
 
         OpenPosition position = null;
@@ -105,7 +118,7 @@ public class ReplayEngine {
 
         log.debug("回测完成：bars={}, spread={}, slippage={}, trades={}, finalEquity={}",
                 n, spreadPoints, slippagePoints, trades.size(), equity);
-        return new EngineResult(List.copyOf(trades), props.getInitialEquity(), equity, maxDrawdown);
+        return new EngineResult(List.copyOf(trades), initialEquity, equity, maxDrawdown);
     }
 
     // ==================== 内部实现 ====================
@@ -138,51 +151,18 @@ public class ReplayEngine {
 
         long openEpoch = bars.get(pos.entryIndex()).time();
         long closeEpoch = bars.get(index).time();
-        double swap = computeSwap(openEpoch, closeEpoch, volume);
+        double swap = swapModel.swapFor(openEpoch, closeEpoch, volume);
         int holdSec = (int) Math.max(0, closeEpoch - openEpoch);
 
         return new ClosedTrade(pos.entryIndex(), index,
                 toLocalDateTime(openEpoch), toLocalDateTime(closeEpoch),
                 pos.side(), volume, pos.entryPrice(), closePrice, pos.sl(), pos.tp(),
-                gross, swap, holdSec, reason);
+                gross, swap, holdSec, reason, 0, 0, "SINGLE_LEG");
     }
 
-    /** 隔夜费：持仓跨越每日结算点则计一次，周三（可配）计三倍（固定日均近似）。 */
-    private double computeSwap(long openEpoch, long closeEpoch, double volume) {
-        if (!props.isSwapOn() || props.getSwapPerLotPerDay() == 0) {
-            return 0;
-        }
-        DayOfWeek triple = parseWeekday(props.getSwapTripleWeekday());
-        int hour = Math.min(23, Math.max(0, props.getSettlementHour()));
-        LocalDate openDate = toLocalDate(openEpoch);
-        LocalDate closeDate = toLocalDate(closeEpoch);
-        double total = 0;
-        for (LocalDate d = openDate; !d.isAfter(closeDate); d = d.plusDays(1)) {
-            long settlement = d.atTime(hour, 0).atZone(zone).toEpochSecond();
-            if (settlement > openEpoch && settlement <= closeEpoch) {
-                double factor = (triple != null && d.getDayOfWeek() == triple) ? 3.0 : 1.0;
-                total += props.getSwapPerLotPerDay() * volume * factor;
-            }
-        }
-        return total;
-    }
+    /** 隔夜费口径已抽到 {@link SwapModel}（多腿引擎复用同一算法）。 */
 
     private LocalDateTime toLocalDateTime(long epochSecond) {
         return LocalDateTime.ofInstant(Instant.ofEpochSecond(epochSecond), zone);
-    }
-
-    private LocalDate toLocalDate(long epochSecond) {
-        return Instant.ofEpochSecond(epochSecond).atZone(zone).toLocalDate();
-    }
-
-    private static DayOfWeek parseWeekday(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        try {
-            return DayOfWeek.valueOf(raw.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
     }
 }

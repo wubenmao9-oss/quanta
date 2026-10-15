@@ -19,6 +19,14 @@ public class BacktestTrade {
     private BigDecimal profit;
     private BigDecimal swap;
     private Integer holdSec;
+    /** 平仓原因（TP/SL/HARD_SL/END/DAY_LOCK/TOTAL_LOCK/MAX_LEVEL）。 */
+    private String exitReason;
+    /** 所属轮编号（多腿策略；单仓策略为 0）。 */
+    private Integer cycleNo;
+    /** 该腿在轮内序号（多腿策略；单仓策略为 0）。 */
+    private Integer level;
+    /** 引擎类型（SINGLE_LEG/MARTIN/GRID/LEGACY/STORED）。 */
+    private String engineKind;
 
     public Long getId() {
         return id;
@@ -122,5 +130,37 @@ public class BacktestTrade {
 
     public void setHoldSec(Integer holdSec) {
         this.holdSec = holdSec;
+    }
+
+    public String getExitReason() {
+        return exitReason;
+    }
+
+    public void setExitReason(String exitReason) {
+        this.exitReason = exitReason;
+    }
+
+    public Integer getCycleNo() {
+        return cycleNo;
+    }
+
+    public void setCycleNo(Integer cycleNo) {
+        this.cycleNo = cycleNo;
+    }
+
+    public Integer getLevel() {
+        return level;
+    }
+
+    public void setLevel(Integer level) {
+        this.level = level;
+    }
+
+    public String getEngineKind() {
+        return engineKind;
+    }
+
+    public void setEngineKind(String engineKind) {
+        this.engineKind = engineKind;
     }
 }

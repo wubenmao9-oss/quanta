@@ -8,6 +8,7 @@ import com.benmao.quanta.mapper.AgentDecisionLogMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
 import com.benmao.quanta.mapper.TradePlanMapper;
 import com.benmao.quanta.memory.MemoryService;
+import com.benmao.quanta.strategy.StrategyProperties;
 import com.benmao.quanta.trade.TradeCommand;
 import com.benmao.quanta.trade.TradingService;
 import dev.langchain4j.model.output.TokenUsage;
@@ -75,7 +76,8 @@ class AgentServiceTest {
 
         AgentWriteTools writeTools = new AgentWriteTools(tradingService, planMapper);
         service = new AgentService(props, snapshot, ai, new AgentDecisionParser(om), writeTools,
-                sessionService, modelFactory, marketTools, strategyMapper, logMapper, memoryService, om);
+                sessionService, modelFactory, marketTools, strategyMapper, logMapper, memoryService,
+                new StrategyProperties(), om);
 
         when(sessionService.ensureSession(any(), any(), any(), any(), any())).thenReturn(7L);
         when(snapshot.build(any(), any())).thenReturn(new LinkedHashMap<>(Map.of("symbol", "GOLD")));
@@ -210,6 +212,31 @@ class AgentServiceTest {
     void disabledAgentRejects() {
         props.setEnabled(false);
         assertThrows(BizException.class, () -> service.decide(req()));
+    }
+
+    @Test
+    @DisplayName("演练模式开启 → 优先选用 DRILL 策略（绕过门禁，仅验证下单）")
+    void drillModePrefersDrillStrategy() {
+        StrategyProperties sp = new StrategyProperties();
+        sp.getGate().setDrillEnabled(true);
+        AgentService drillService = new AgentService(props, snapshot, ai, new AgentDecisionParser(om),
+                new AgentWriteTools(tradingService, planMapper), sessionService, modelFactory, marketTools,
+                strategyMapper, logMapper, memoryService, sp, om);
+
+        Strategy drill = new Strategy();
+        drill.setId(17L);
+        drill.setName("演练-高频_SCALP");
+        drill.setVersion(1);
+        drill.setStatus("DRILL");
+        drill.setPrompt("无持仓必须开仓");
+        when(strategyMapper.listAll()).thenReturn(List.of(activeStrategy(), drill));
+        when(ai.decide(any(), any()))
+                .thenReturn(llm("{\"action\":\"WAIT\",\"confidence\":0.8,\"reason\":\"已持仓\"}"));
+
+        AgentDecideResult r = drillService.decide(req());
+
+        assertEquals(Long.valueOf(17L), r.strategyId());
+        assertEquals("演练-高频_SCALP", r.strategyName());
     }
 
     @Test

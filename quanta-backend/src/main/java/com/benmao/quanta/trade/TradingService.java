@@ -201,7 +201,8 @@ public class TradingService {
 
     private RiskRequest toRiskRequest(TradeCommand cmd, String traceId) {
         return new RiskRequest(cmd.action(), cmd.symbol(), cmd.side(), cmd.volume(), cmd.price(),
-                cmd.sl(), cmd.tp(), cmd.tpMode(), cmd.ticket(), cmd.sessionId(), traceId, cmd.origin());
+                cmd.sl(), cmd.tp(), cmd.tpMode(), cmd.ticket(), cmd.sessionId(), traceId,
+                cmd.origin(), cmd.profile());
     }
 
     /** 把副作用放到当前事务结束（提交/回滚）后执行；无事务则立即执行。 */

@@ -36,23 +36,33 @@ public class AgentTriggerWakeHandler implements TriggerWakeHandler {
             return;
         }
         Long sessionId = null;
+        boolean positionOpened = false;
         try {
             AgentDecideRequest req = new AgentDecideRequest(
                     hit.symbol(), null, null, null, hit.source().name(), hit.reason());
             AgentDecideResult r = agentService.decide(req);
             sessionId = r.sessionId();
+            // 开仓成功的会话不再是一次性研判窗口，而是该持仓的「管理会话」：
+            // 绑定 ticket 并保活，直到持仓了结由生命周期对账关闭。
+            positionOpened = r.action() == AgentAction.OPEN && r.executed() && r.ticket() != null;
+            if (positionOpened) {
+                sessionService.linkTicket(sessionId, r.ticket());
+            }
             log.info("自动唤醒完成：触发={} 会话={} 动作={} 置信度={} 执行={} ticket={}",
                     hit.source(), r.sessionId(), r.action(), r.confidence(), r.executed(), r.ticket());
         } catch (RuntimeException e) {
             log.warn("自动唤醒 Agent 研判失败（触发={}）：{}", hit.source(), e.getMessage());
         } finally {
-            closeSession(sessionId);
+            if (!positionOpened) {
+                closeSession(sessionId);
+            }
         }
     }
 
     /**
-     * 自动唤醒的会话是<b>短生命周期「研判窗口」</b>：一次触发一次研判，结束即关闭，
-     * 避免 ACTIVE 会话随每次唤醒无限累积（M14 现场：8 条会话全 ACTIVE 无一关闭）。
+     * 未开仓的自动唤醒会话是<b>短生命周期「研判窗口」</b>：一次触发一次研判，结束即关闭，
+     * 避免 ACTIVE 会话随每次唤醒无限累积；<b>开仓成功的会话不在此关闭</b>——它是持仓的管理会话，
+     * 由持仓生命周期对账在「该持仓离场」时关闭（一持仓一会话）。
      */
     private void closeSession(Long sessionId) {
         if (sessionId == null) {

@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 /**
  * 运维接口（M13）：三态运行模式 + 状态观测 + 手工对账。
  *
@@ -46,6 +48,12 @@ public class OpsController {
     @PostMapping("/reconcile")
     public Result<ReconcileService.ReconcileReport> reconcile() {
         return Result.ok(reconcileService.reconcile());
+    }
+
+    /** 立即执行一次「平仓回写修复」（券商已平、本地仍 FILLED → 回写 CLOSED）。 */
+    @PostMapping("/reconcile/repair")
+    public Result<List<Long>> repair() {
+        return Result.ok(reconcileService.repairClosedFromDeals());
     }
 
     /** 运行模式请求体。 */

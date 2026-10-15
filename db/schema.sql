@@ -234,6 +234,9 @@ CREATE TABLE IF NOT EXISTS backtest_run (
   max_drawdown   DECIMAL(18,2) DEFAULT NULL,
   trade_count    INT           DEFAULT NULL,
   avg_hold_sec   INT           DEFAULT NULL,
+  cycle_count    INT           DEFAULT NULL COMMENT '轮数(多腿策略=轮数;单仓=成交笔数)',
+  max_losing_cycles INT        DEFAULT NULL COMMENT '最长连续净亏轮数(BASKET 门禁 c6)',
+  avg_levels     DECIMAL(5,2)  DEFAULT NULL COMMENT '平均每轮档数(BASKET 门禁 c7)',
   status         VARCHAR(16)   DEFAULT NULL,
   create_time    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_strategy (strategy_id)
@@ -256,6 +259,10 @@ CREATE TABLE IF NOT EXISTS backtest_trade (
   profit      DECIMAL(18,2) DEFAULT NULL,
   swap        DECIMAL(18,2) DEFAULT NULL,
   hold_sec    INT           DEFAULT NULL,
+  exit_reason VARCHAR(16)   DEFAULT NULL COMMENT 'TP/SL/HARD_SL/END/DAY_LOCK/TOTAL_LOCK/MAX_LEVEL',
+  cycle_no    INT           DEFAULT NULL COMMENT '所属轮编号(单仓=0)',
+  level       INT           DEFAULT NULL COMMENT '轮内腿序号(单仓=0)',
+  engine_kind VARCHAR(16)   DEFAULT NULL COMMENT 'SINGLE_LEG/MARTIN/GRID/LEGACY/STORED',
   KEY idx_run (run_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='回测明细';
 
@@ -291,6 +298,11 @@ CREATE TABLE IF NOT EXISTS risk_config (
   cooldown_minutes     INT           NOT NULL DEFAULT 0 COMMENT '前期0=关闭',
   spread_limit         DECIMAL(10,2) NOT NULL DEFAULT 50 COMMENT '点差上限(动态兜底)',
   symbol_whitelist     VARCHAR(255)  NOT NULL DEFAULT 'GOLD',
+  -- GRID 专用档（多腿/马丁执行器）：放宽 R2 手数上限 / R3 持仓上限 / R15 盈亏比地板 / R4 单笔风险预算
+  grid_max_volume      DECIMAL(10,2) DEFAULT NULL COMMENT 'GRID档单笔手数上限(须≥最高腿手数)',
+  grid_max_positions   INT           DEFAULT NULL COMMENT 'GRID档最大持仓数(须≥最大腿数)',
+  grid_min_rr          DECIMAL(5,2)  DEFAULT NULL COMMENT 'GRID档盈亏比地板',
+  grid_max_risk_pct    DECIMAL(5,2)  DEFAULT NULL COMMENT 'GRID档单笔风险预算%(覆盖R4 max_risk_pct;NULL→兜底25.00)',
   update_time          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='风控阈值';
 
@@ -336,3 +348,76 @@ CREATE TABLE IF NOT EXISTS sys_state (
   active_strategy_id BIGINT      DEFAULT NULL,
   update_time        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='系统运行状态';
+
+-- ----------------------------------------------------------------------
+-- 19) 实盘马丁轮次（P2 cycle 执行器）：一轮 = 一个马丁篮子的完整生命周期
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS martin_cycle (
+  id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
+  cycle_no           INT           NOT NULL DEFAULT 0 COMMENT '轮编号(从1起)',
+  symbol             VARCHAR(32)   NOT NULL,
+  side               VARCHAR(8)    NOT NULL COMMENT 'BUY/SELL',
+  mode               VARCHAR(16)   NOT NULL DEFAULT 'MARTIN',
+  state              VARCHAR(24)   NOT NULL DEFAULT 'S2_ENTERED' COMMENT 'S2_ENTERED/S3_ADDED/S4_HOLDING/CLOSED…',
+  level              INT           NOT NULL DEFAULT 1 COMMENT '当前腿数',
+  base_volume        DECIMAL(10,2) DEFAULT NULL COMMENT '首腿手数',
+  total_volume       DECIMAL(10,2) DEFAULT NULL COMMENT '总手数',
+  avg_entry          DECIMAL(18,5) DEFAULT NULL COMMENT '加权均价',
+  basket_tp          DECIMAL(18,5) DEFAULT NULL COMMENT '整轮止盈价',
+  cycle_start_equity DECIMAL(18,2) DEFAULT NULL COMMENT '轮初权益(轮级硬止损基准)',
+  session_id         BIGINT        DEFAULT NULL COMMENT '关联会话(1:1)',
+  opened_at          DATETIME      DEFAULT NULL,
+  closed_at          DATETIME      DEFAULT NULL,
+  close_reason       VARCHAR(32)   DEFAULT NULL COMMENT 'TP/HARD_SL/DAY_LOCK/TOTAL_LOCK/MANUAL/END/MAX_LEVEL',
+  realized_pnl       DECIMAL(18,2) DEFAULT NULL COMMENT '轮净利',
+  update_time        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_state (state),
+  KEY idx_session (session_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='实盘马丁轮次';
+
+-- ----------------------------------------------------------------------
+-- 20) 实盘马丁轮腿（每条对应券商侧一个真实持仓 ticket）
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS martin_cycle_leg (
+  id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+  cycle_id     BIGINT        NOT NULL,
+  level        INT           NOT NULL COMMENT '腿序号(1起)',
+  ticket       BIGINT        DEFAULT NULL COMMENT '券商持仓票号',
+  side         VARCHAR(8)    DEFAULT NULL COMMENT 'BUY/SELL',
+  volume       DECIMAL(10,2) DEFAULT NULL,
+  entry_price  DECIMAL(18,5) DEFAULT NULL,
+  sl           DECIMAL(18,5) DEFAULT NULL COMMENT '该腿真实止损价',
+  opened_at    DATETIME      DEFAULT NULL,
+  closed_at    DATETIME      DEFAULT NULL,
+  close_price  DECIMAL(18,5) DEFAULT NULL,
+  realized_pnl DECIMAL(18,2) DEFAULT NULL,
+  KEY idx_cycle (cycle_id),
+  KEY idx_ticket (ticket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='实盘马丁轮腿';
+
+-- ----------------------------------------------------------------------
+-- 21) 实盘 cycle 锁闸门（总亏锁持久化；日锁不落库，跨日自动重置）
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cycle_lock (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  lock_key    VARCHAR(32)   NOT NULL COMMENT '锁键(当前仅 TOTAL)',
+  lock_until  DATETIME      DEFAULT NULL COMMENT '锁定到期时间',
+  ref_equity  DECIMAL(18,2) DEFAULT NULL COMMENT '参照权益',
+  ref_time    DATETIME      DEFAULT NULL COMMENT '参照时间(累计亏损统计起点)',
+  update_time DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_lock_key (lock_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='实盘 cycle 锁闸门';
+
+-- ----------------------------------------------------------------------
+-- 22) 实盘 cycle 锁档设置（单行；前端「策略锁档」面板可改，0 或 NULL = 该档不启用/无上限）
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cycle_setting (
+  id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+  setting_key         VARCHAR(32)  NOT NULL COMMENT '设置键(当前仅 DEFAULT，单行)',
+  max_single_loss_pct DECIMAL(6,2) DEFAULT NULL COMMENT '单轮最大亏损%(0或NULL=不启用)',
+  max_daily_loss_pct  DECIMAL(6,2) DEFAULT NULL COMMENT '单日最大亏损%(0或NULL=不启用)',
+  max_total_loss_pct  DECIMAL(6,2) DEFAULT NULL COMMENT '累计最大亏损%(0或NULL=不启用)',
+  lock_hours          INT          DEFAULT NULL COMMENT '触发锁后的锁定时长(小时;NULL→兜底24)',
+  update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_setting_key (setting_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='实盘 cycle 锁档设置(人工可改)';

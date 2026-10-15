@@ -170,6 +170,14 @@ quanta:
     default-cooldown-minutes: 0
     default-spread-limit: 50
     default-symbol-whitelist: GOLD
+    # GRID 专用档兜底默认（risk_config.grid_* 为空时生效；仅多腿/马丁执行器使用，
+    # 放宽 R2 手数上限 / R3 持仓上限 / R15 盈亏比地板 / R4 单笔风险预算，
+    # 其余规则两档共用同列保持硬约束）
+    default-grid-max-volume: 2.00
+    default-grid-max-positions: 5
+    default-grid-min-rr: 0.50
+    # R4 放宽：马丁单腿的「灾难兜底 SL」距离大（默认 5.00USD），沿用 DEFAULT 档 2% 会整腿被拒
+    default-grid-max-risk-pct: 25.00
   # 调度层（M7）：盯盘 / 触发 / 会话窗口（省 Token 的核心：Java 盯盘，命中才唤醒）
   schedule:
     # 总开关：关闭后 MarketWatcher 与 TriggerEngine 都不工作
@@ -323,6 +331,17 @@ quanta:
       max-drawdown-pct: 15.0
       # 样本内占比（按时间切线：前 70% 为样本内 A，其余为样本外 B）
       in-sample-ratio: 0.7
+      # 门禁回测初始权益（基准账户；同时决定回撤百分比口径与马丁手数基数）
+      initial-equity: 10000.0
+      # 多腿/网格（BASKET）门禁：最小轮数（不足则不过）
+      min-cycles: 100
+      # 多腿/网格（BASKET）门禁：最大连续净亏轮数上限
+      max-losing-cycles: 3
+      # 多腿/网格（BASKET）门禁：平均每轮档数上限（应 ≤ 策略 MaxLevels）
+      max-avg-levels: 5.0
+      # 演练模式开关（默认关）：开启后允许 /api/strategy/{id}/drill-approve 绕过门禁把策略置 DRILL，
+      # 并让 AI 优先用 DRILL 策略研判——仅用于验证「AI 是否真的会下单」，禁止用于实盘资金。
+      drill-enabled: ${QUANTA_DRILL_ENABLED:false}
     # 趋势策略：EMA 金叉死叉 + ADX 趋势过滤 + ATR 止损
     # 参数为 GOLD 真实数据门禁回炉调参所得（150 天 M1，30 点差档通过，见 P0清单 M9 备注）
     trend:
@@ -345,3 +364,152 @@ quanta:
       atr-period: 14
       atr-stop-mult: 1.5
       target-rr: 2.0
+    # 演练高频策略（SCALP）：EMA 金叉死叉 + ATR 止损，无 ADX 过滤；仅用于演练模式验证 AI 能否真实下单
+    # GOLD M1、90 天实测：约 2900+ 笔（≈33 笔/天）、胜率≈33%、30 点差档期望为负（属预期，不可正式上线）
+    scalp:
+      ema-fast: 9
+      ema-slow: 21
+      atr-period: 14
+      atr-stop-mult: 1.5
+      target-rr: 1.2
+    # 演练高频薅点策略（TINY_SCALP）：EMA 判方向 + 固定美元距离止损，无趋势过滤；一次一笔、硬止盈
+    # 仅用于演练模式验证 AI 能否真实高频下单（目标一小时不少于 5 单）并固定薅 2~3 美元，不可正式上线
+    tiny:
+      ema-fast: 9
+      ema-slow: 21
+      # 固定止损距离（USD；GOLD 上 1 USD = 100 points）
+      sl-distance-usd: 2.5
+      # 目标盈亏比：止盈距离 = 止损距离 × 1.2 = 3.0 USD
+      target-rr: 1.2
+      # 要求大模型给出的最低置信度（必须通过置信度门控）
+      confidence-floor: 0.7
+
+    # 笨猫黄金（BENMAO_GOLD）：单仓趋势跟随，改写自 MT5 源码「谷歌黄金，修改了动态止盈损，动态仓位，.mq5」
+    # 进场：价格 vs EMA52 同向 + RSI 相对 50 的动量确认 + ADX 趋势过滤 + 交易时段过滤；一次一笔
+    # 出场：SL = ATR × 2.0，TP = SL × 2.0（等价源码 TP 4×ATR / SL 2×ATR）
+    # 源码有、本项目未覆盖：1.5×ATR 保本移动止损、按余额×风险% 的动态手数（EntrySignal 无法表达）
+    benmao-gold:
+      # 趋势基准 EMA 周期（源码 iMA 固定 52）
+      ema-period: 52
+      # RSI 周期
+      rsi-period: 14
+      # RSI 动量中线：多头需 RSI 高于该值，空头需低于该值
+      rsi-midline: 50.0
+      # ADX 周期
+      adx-period: 14
+      # ADX 过滤阈值：低于该值不交易（源码 InpADXThreshold=20）
+      adx-threshold: 20.0
+      # ATR 周期
+      atr-period: 14
+      # 止损距离 = ATR × 该倍数（源码 InpStopATR=2.0）
+      atr-stop-mult: 2.0
+      # 目标盈亏比（源码 TP 4×ATR ÷ SL 2×ATR = 2.0）
+      target-rr: 2.0
+      # 是否启用交易时段过滤（源码 InpUseTimeFilter=true）
+      use-time-filter: true
+      # 时段起点小时（含）
+      start-hour: 8
+      # 时段终点小时（不含）
+      end-hour: 20
+      # 时段过滤时区：库内 K 线 epoch 为 MT5 服务器时间原样透传，按 UTC 解读即等价「平台时间」
+      time-filter-zone: UTC
+
+    # 笨猫马丁-网格双边（BENMAO_MA_GRID / BASKET，P1）：形态自适应多腿策略
+    # 形态：趋势（EMA 快慢分离 + ADX 高）→ 马丁（逆势补腿×2 手数、整轮均价止盈）；震荡（EMA 重合 + ADX 低）→ 双边网格
+    # 机械步骤（手数/均价/止盈/挂单）由 BasketReplayEngine 确定性执行；AI 仅决定是否启动本轮及方向，永不直接下单
+    # 门禁回测需显式传 initial-equity: 10000（马丁手数按 base-lot-pct 与权益联动）
+    basket:
+      session:
+        # 交易时段（小时，含起点不含终点）
+        start-hour: 8
+        end-hour: 22
+        # 时段判定时区（库内 K 线为 MT5 服务器时间原样透传，UTC 解读即等价「平台时间」）
+        time-zone: UTC
+        # 趋势判定：EMA 快慢相对差阈值（百分比）
+        trend-epsilon-pct: 0.05
+        # 形态判定用 EMA 快/慢周期
+        ema-fast: 50
+        ema-slow: 200
+        # ADX 周期
+        adx-period: 14
+        # ADX ≤ 该值且 EMA 几乎重合 → 震荡（GRID）
+        adx-grid-max: 20.0
+        # ADX ≥ 该值且 EMA 分离 → 趋势（MARTIN）
+        adx-trend-min: 25.0
+      martin:
+        # 最大腿数
+        max-levels: 5
+        # 每补一腿手数乘数（1.0 = 等手数，每腿同手、不马丁）
+        # 说明：《策略.txt》原文为 2.0 倍投（0.1→…→1.6），但那是 $10,000 账户的口径；
+        #      小账户下最高腿被放大 16 倍，单轮亏损会被顶穿。本策略按「所有仓当作一个仓」执行，
+        #      故固定等手数。恢复倍投：把本值改回 2.0 即可（无需改代码）。
+        multiplier: 1.0
+        # 第 1 腿手数 = 权益 × base-lot-pct(%)（10000 权益 → 0.1 手）
+        base-lot-pct: 0.001
+        # 单腿<b>纯黑障</b>止损（project-points；GOLD 上 100 points = 1.00 USD）
+        # 真正的止损是「整轮止损」（由执行器按单轮亏损%主动全平，见 cycle_setting）；
+        # 这里的单腿 SL 只是程序/桥接挂掉时的断电保险，必须远大于「整轮止损距离」，
+        # 否则会像 2026-10-15 那样被券商逐个抢跑、把整轮止损架空。
+        # 3000 = 30.00 USD；注意：若把「单轮亏损%」调大，需同步调大本值。
+        sl-points: 3000
+        # 整轮按加权均价止盈的距离（project-points；100 = 1.00 USD）
+        # 与 sl-points 解耦：放宽兜底 SL 不会把止盈目标一并拖远
+        tp-points: 100
+        # 逆势每多少 points 补一腿（100 points = 1.00 USD）
+        add-leg-distance-points: 100
+        # 整轮按加权均价止盈的目标盈亏比
+        basket-target-rr: 1.0
+        # 手数步长（MT5 最小 0.01）
+        volume-step: 0.01
+        # 手数下限
+        volume-min: 0.01
+        # 单腿手数上限
+        max-volume: 2.0
+      grid:
+        # 网格步长（points；100 points = 1.00 USD）
+        step-points: 100
+        # 每侧最大腿数
+        legs-per-side: 3
+        # 网格单腿手数
+        volume: 0.01
+        # 网格单腿目标盈亏比
+        target-rr: 1.0
+        # 网格单腿止损倍数（× step 距离）
+        sl-mult: 1.0
+        # 挂单有效期（小时）
+        expire-hours: 8
+        # 区间统计回看窗口（K 线根数）
+        range-window: 24
+      locks:
+        # 单轮最大亏损（占轮初权益百分比，触发即整轮硬止损平仓）
+        max-single-loss-pct: 5.0
+        # 单日最大亏损（占日初权益百分比，触发即锁当日）
+        max-daily-loss-pct: 3.0
+        # 累计最大亏损（占总权益百分比，触发即锁）
+        max-total-loss-pct: 10.0
+        # 触发锁后的锁定时长（小时）
+        lock-hours: 24
+
+  # 实盘 cycle 执行器（P2）：「笨猫马丁-网格双边」马丁子模式的确定性执行器
+  # 状态机、写出口、风控档位、锁闸门全部为确定性代码；不接受 LLM 指令（AI 至多影响本轮的启动方向且默认关）
+  # 安全默认：enabled=false 且 dry-run=true；两者显式改为 true/false 且策略为 DRILL/ACTIVE 才会真实下单
+  cycle:
+    enabled: ${QUANTA_CYCLE_ENABLED:false}
+    # true：状态机照跑但只打日志，不真实下单、不落库（用于验证逻辑）
+    dry-run: ${QUANTA_CYCLE_DRY_RUN:true}
+    # 目标品种（券商真实名）/ 形态判定周期 / 取 K 线根数（须 ≥ max(emaSlow, 2×adxPeriod) 预热期）
+    symbol: ${QUANTA_MT5_SYMBOL:GOLD}
+    timeframe: M5
+    kline-count: 300
+    # 对应策略库中的策略名（须与 strategy.name 完全一致；状态须为 DRILL 或 ACTIVE）
+    strategy-name: 笨猫马丁-网格双边
+    # 会话类型（AUTO/MANUAL）
+    session-type: AUTO
+    # 开首腿连续被风控拒达该次数 → 进入冷却
+    start-fail-limit: 3
+    start-cooldown-minutes: 5
+    # 是否允许用 AI 方向提案（P2 默认关：用规则方向，避免改动 AgentService）
+    allow-ai-direction: false
+    min-start-confidence: 0.6
+    # tick 间隔（毫秒）
+    tick-interval-ms: 3000

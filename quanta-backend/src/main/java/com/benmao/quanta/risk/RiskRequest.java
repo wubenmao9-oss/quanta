@@ -17,6 +17,7 @@ import java.math.BigDecimal;
  * @param sessionId 发起会话（R13 持仓互斥用；可空 = 人工）
  * @param traceId   追踪号（R8 幂等用）
  * @param origin    发起来源（M13：AI 自主 / MANUAL 人工；仅影响 R11 三态判定）
+ * @param profile   风控档位（默认 {@link RiskProfile#DEFAULT}；多腿/马丁执行器传 {@link RiskProfile#GRID}）
  */
 public record RiskRequest(RiskAction action,
                           String symbol,
@@ -29,11 +30,21 @@ public record RiskRequest(RiskAction action,
                           Long ticket,
                           Long sessionId,
                           String traceId,
-                          RiskOrigin origin) {
+                          RiskOrigin origin,
+                          RiskProfile profile) {
 
-    /** 兼容构造：默认 {@link RiskOrigin#AI}。 */
+    /** 兼容构造：默认 {@link RiskOrigin#AI} + {@link RiskProfile#DEFAULT}。 */
     public RiskRequest(RiskAction action, String symbol, RiskSide side, BigDecimal volume, BigDecimal price,
                        BigDecimal sl, BigDecimal tp, String tpMode, Long ticket, Long sessionId, String traceId) {
-        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, traceId, RiskOrigin.AI);
+        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, traceId,
+                RiskOrigin.AI, RiskProfile.DEFAULT);
+    }
+
+    /** 兼容构造：默认 {@link RiskProfile#DEFAULT}。 */
+    public RiskRequest(RiskAction action, String symbol, RiskSide side, BigDecimal volume, BigDecimal price,
+                       BigDecimal sl, BigDecimal tp, String tpMode, Long ticket, Long sessionId, String traceId,
+                       RiskOrigin origin) {
+        this(action, symbol, side, volume, price, sl, tp, tpMode, ticket, sessionId, traceId,
+                origin, RiskProfile.DEFAULT);
     }
 }

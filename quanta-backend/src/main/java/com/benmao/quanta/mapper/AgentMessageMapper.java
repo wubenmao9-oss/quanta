@@ -26,6 +26,22 @@ public interface AgentMessageMapper {
     @Select("SELECT * FROM agent_message ORDER BY id")
     List<AgentMessage> listAll();
 
+    /**
+     * 会话内最近的「真正对话」消息（role=user/assistant，最新在前），
+     * 供自由问答（{@code /api/agent/chat}）按 sessionId 拼接多轮上下文。
+     */
+    @Select("SELECT * FROM agent_message WHERE session_id = #{sessionId} "
+            + "AND role IN ('user','assistant') ORDER BY id DESC LIMIT #{limit}")
+    List<AgentMessage> listRecentDialogue(@Param("sessionId") Long sessionId, @Param("limit") int limit);
+
+    /**
+     * 会话内全部「真正对话」消息（role=user/assistant，按时间升序），
+     * 供前端在某个持仓会话中打开 AI 对话框时还原既有聊天记录。
+     */
+    @Select("SELECT * FROM agent_message WHERE session_id = #{sessionId} "
+            + "AND role IN ('user','assistant') ORDER BY id ASC")
+    List<AgentMessage> listDialogueAsc(@Param("sessionId") Long sessionId);
+
     @Update("UPDATE agent_message SET session_id = #{sessionId}, role = #{role}, content = #{content}, "
             + "tokens = #{tokens} WHERE id = #{id}")
     int update(AgentMessage e);

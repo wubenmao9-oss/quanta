@@ -59,6 +59,21 @@ public class StrategyController {
         return Result.ok(gateService.approve(id, r.symbol(), r.from(), r.to()));
     }
 
+    /**
+     * 演练上线：绕过门禁把策略置 {@code DRILL}（仅用于验证 AI 能否真实下单，禁止实盘资金）。
+     * 需显式开启 {@code quanta.strategy.gate.drill-enabled}，否则 403。
+     */
+    @PostMapping("/{id}/drill-approve")
+    public Result<Strategy> drillApprove(@PathVariable long id) {
+        return Result.ok(gateService.drillApprove(id));
+    }
+
+    /** 演练回滚：把 {@code DRILL} 策略退回 {@code DRAFT}（一键回滚）。 */
+    @PostMapping("/{id}/drill-revoke")
+    public Result<Strategy> drillRevoke(@PathVariable long id) {
+        return Result.ok(gateService.drillRevoke(id));
+    }
+
     /** 门禁/批准请求体（均可空：缺省用 GOLD、库内已有 K 线全区间）。 */
     public record GateReq(String symbol, String from, String to) {
     }

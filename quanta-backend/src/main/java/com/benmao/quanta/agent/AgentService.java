@@ -10,6 +10,7 @@ import com.benmao.quanta.mapper.AgentDecisionLogMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
 import com.benmao.quanta.memory.MemoryService;
 import com.benmao.quanta.schedule.TriggerSource;
+import com.benmao.quanta.strategy.StrategyProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.service.Result;
 import org.slf4j.Logger;
@@ -79,6 +80,7 @@ public class AgentService {
     private final StrategyMapper strategyMapper;
     private final AgentDecisionLogMapper logMapper;
     private final MemoryService memoryService;
+    private final StrategyProperties strategyProps;
     private final ObjectMapper mapper;
 
     public AgentService(AgentProperties props,
@@ -92,6 +94,7 @@ public class AgentService {
                         StrategyMapper strategyMapper,
                         AgentDecisionLogMapper logMapper,
                         MemoryService memoryService,
+                        StrategyProperties strategyProps,
                         ObjectMapper mapper) {
         this.props = props;
         this.snapshotService = snapshotService;
@@ -104,6 +107,7 @@ public class AgentService {
         this.strategyMapper = strategyMapper;
         this.logMapper = logMapper;
         this.memoryService = memoryService;
+        this.strategyProps = strategyProps;
         this.mapper = mapper;
     }
 
@@ -283,14 +287,27 @@ public class AgentService {
             if (s == null) {
                 throw new BizException(ResultCode.NOT_FOUND.code(), "策略不存在: id=" + strategyId, 404);
             }
-            if (!"ACTIVE".equalsIgnoreCase(s.getStatus())) {
+            if (!"ACTIVE".equalsIgnoreCase(s.getStatus()) && !"DRILL".equalsIgnoreCase(s.getStatus())) {
                 throw new BizException(ResultCode.BIZ_ERROR.code(),
-                        "策略未上线（status=" + s.getStatus() + "），拒绝用于研判；请先经门禁通过并人工批准置 ACTIVE", 400);
+                        "策略未上线（status=" + s.getStatus() + "），拒绝用于研判；"
+                                + "请先经门禁通过并人工批准置 ACTIVE，或在演练模式内置 DRILL", 400);
             }
             requirePrompt(s);
             return s;
         }
         List<Strategy> all = strategyMapper.listAll();
+        // 演练模式：优先选用 DRILL 策略（绕过门禁、仅用于验证 AI 能否真实下单）
+        if (strategyProps.getGate().isDrillEnabled()) {
+            Strategy drill = all.stream()
+                    .filter(s -> "DRILL".equalsIgnoreCase(s.getStatus()))
+                    .findFirst().orElse(null);
+            if (drill != null) {
+                requirePrompt(drill);
+                log.warn("演练模式已开启：本次研判使用 DRILL 策略 id={} name={}（未通过门禁，禁止用于实盘资金）",
+                        drill.getId(), drill.getName());
+                return drill;
+            }
+        }
         Strategy active = all.stream().filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus())).findFirst().orElse(null);
         if (active == null) {
             throw new BizException(ResultCode.BIZ_ERROR.code(),

@@ -65,7 +65,7 @@ class RiskGuardTest {
                 499.98, 500.0, 8.4, 491.6, 0.0, 500));
         when(bridge.positions(any())).thenReturn(new ArrayList<>());
 
-        when(riskConfig.thresholds()).thenReturn(defaultThresholds());
+        when(riskConfig.thresholds(any())).thenReturn(defaultThresholds());
         when(riskConfig.runMode()).thenReturn("AUTO");
 
         when(tradeOrderMapper.sumRealizedPnlSince(any())).thenReturn(BigDecimal.ZERO);
@@ -150,7 +150,7 @@ class RiskGuardTest {
         RiskThresholds wide = new RiskThresholds(new BigDecimal("0.01"), new BigDecimal("1.00"), 3,
                 new BigDecimal("50"), new BigDecimal("2.00"), new BigDecimal("1.00"),
                 new BigDecimal("5.00"), 3, 0, new BigDecimal("50"), List.of("GOLD"));
-        when(riskConfig.thresholds()).thenReturn(wide);
+        when(riskConfig.thresholds(any())).thenReturn(wide);
         RiskDecision step = guard().evaluate(open(RiskSide.BUY, "0.023", "4189.23", null));
         assertViolated(step, "R2", "VOLUME_STEP_MISMATCH");
         assertEquals(0.01, (double) step.violations().get(0).bounds().get("step"), 1e-9);
@@ -168,6 +168,35 @@ class RiskGuardTest {
         RiskDecision d = guard().evaluate(open(RiskSide.BUY, "0.01", "4189.23", null));
         assertViolated(d, "R3", "MAX_POSITIONS_REACHED");
         assertEquals(3, d.violations().get(0).bounds().get("current"));
+    }
+
+    // ---------------- GRID 档（多腿/马丁执行器专用） ----------------
+
+    @Test
+    @DisplayName("GRID 档：仅放宽 R2/R3（手数上限 2.00、持仓上限 5）；同盘面 DEFAULT 档被 R3 拒")
+    void gridProfileWidensR2R3() {
+        when(riskConfig.thresholds(RiskProfile.GRID)).thenReturn(new RiskThresholds(
+                new BigDecimal("0.01"), new BigDecimal("2.00"), 5,
+                new BigDecimal("50"), new BigDecimal("2.00"), new BigDecimal("0.50"),
+                new BigDecimal("5.00"), 3, 0, new BigDecimal("50"), List.of("GOLD")));
+        when(riskConfig.thresholds(RiskProfile.DEFAULT)).thenReturn(defaultThresholds());
+        when(bridge.positions(any())).thenReturn(List.of(
+                position(1, "buy", 4190, 4180, 4210),
+                position(2, "buy", 4191, 4181, 4211),
+                position(3, "buy", 4192, 4182, 4212),
+                position(4, "buy", 4193, 4183, 4213)));
+
+        // DEFAULT 档：已有 4 仓 ≥ 上限 3 → R3 拒
+        assertViolated(guard().evaluate(open(RiskSide.BUY, "0.01", "4193.00", null)),
+                "R3", "MAX_POSITIONS_REACHED");
+
+        // GRID 档：0.05 手 + 已有 4 仓 → 放行（R2 上限 2.00、R3 上限 5 均放宽）
+        RiskRequest grid = new RiskRequest(RiskAction.OPEN, "GOLD", RiskSide.BUY, new BigDecimal("0.05"),
+                null, new BigDecimal("4193.00"), null, "NONE", null, 1L, "trace-grid",
+                RiskOrigin.AI, RiskProfile.GRID);
+        RiskDecision g = guard().evaluate(grid);
+        assertTrue(g.allowed(), "GRID 档应放行，实际违规=" + g.violations().stream()
+                .map(v -> v.rule() + "/" + v.code()).toList());
     }
 
     // ---------------- R4 单笔风险 ----------------
@@ -229,7 +258,7 @@ class RiskGuardTest {
         RiskThresholds th = new RiskThresholds(new BigDecimal("0.01"), new BigDecimal("0.01"), 3,
                 new BigDecimal("50"), new BigDecimal("2.00"), new BigDecimal("1.00"),
                 new BigDecimal("5.00"), 3, 1, new BigDecimal("50"), List.of("GOLD"));
-        when(riskConfig.thresholds()).thenReturn(th);
+        when(riskConfig.thresholds(any())).thenReturn(th);
         when(tradeOrderMapper.listRecentClosed(anyInt())).thenReturn(List.of(
                 closedOrder(MONDAY.minusMinutes(0)),
                 closedOrder(MONDAY.minusMinutes(5)),

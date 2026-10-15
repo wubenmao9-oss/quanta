@@ -12,6 +12,7 @@ import com.benmao.quanta.mapper.BacktestTradeMapper;
 import com.benmao.quanta.mapper.MarketKlineMapper;
 import com.benmao.quanta.mapper.StrategyMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,49 +53,59 @@ public class BacktestService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final BacktestProperties props;
+    private final BasketStrategyProperties basketProps;
     private final MarketKlineMapper klineMapper;
     private final BacktestRunMapper runMapper;
     private final BacktestTradeMapper tradeMapper;
     private final StrategyMapper strategyMapper;
-    private final Map<String, RuleStrategy> strategies;
+    private final Map<String, StrategyRef> strategies;
     private final Clock clock;
 
     @Autowired
     public BacktestService(BacktestProperties props,
+                           BasketStrategyProperties basketProps,
                            MarketKlineMapper klineMapper,
                            BacktestRunMapper runMapper,
                            BacktestTradeMapper tradeMapper,
                            StrategyMapper strategyMapper,
-                           List<RuleStrategy> strategies) {
-        this(props, klineMapper, runMapper, tradeMapper, strategyMapper, strategies, Clock.systemDefaultZone());
+                           List<RuleStrategy> ruleStrategies,
+                           List<BasketStrategy> basketStrategies) {
+        this(props, basketProps, klineMapper, runMapper, tradeMapper, strategyMapper, ruleStrategies,
+                basketStrategies, Clock.systemDefaultZone());
     }
 
     /** 测试用：可注入固定时钟。 */
     BacktestService(BacktestProperties props,
+                    BasketStrategyProperties basketProps,
                     MarketKlineMapper klineMapper,
                     BacktestRunMapper runMapper,
                     BacktestTradeMapper tradeMapper,
                     StrategyMapper strategyMapper,
-                    List<RuleStrategy> strategies,
+                    List<RuleStrategy> ruleStrategies,
+                    List<BasketStrategy> basketStrategies,
                     Clock clock) {
         this.props = props;
+        this.basketProps = basketProps;
         this.klineMapper = klineMapper;
         this.runMapper = runMapper;
         this.tradeMapper = tradeMapper;
         this.strategyMapper = strategyMapper;
-        Map<String, RuleStrategy> map = new LinkedHashMap<>();
-        for (RuleStrategy s : strategies) {
-            map.put(s.key(), s);
+        Map<String, StrategyRef> map = new LinkedHashMap<>();
+        for (RuleStrategy s : ruleStrategies) {
+            map.put(s.key(), new StrategyRef(Family.SINGLE_LEG, s, null));
+        }
+        for (BasketStrategy s : basketStrategies) {
+            map.put(s.key(), new StrategyRef(Family.BASKET, null, s));
         }
         this.strategies = map;
         this.clock = clock;
     }
 
-    /** 可用规则策略清单。 */
+    /** 可用策略清单（单仓 + 多腿/网格）。 */
     public List<StrategyView> availableStrategies() {
         List<StrategyView> out = new ArrayList<>();
-        for (RuleStrategy s : strategies.values()) {
-            out.add(new StrategyView(s.key(), s.displayName()));
+        for (StrategyRef s : strategies.values()) {
+            out.add(new StrategyView(s.key(), s.displayName(), s.family().name()));
         }
         return out;
     }
@@ -102,20 +113,22 @@ public class BacktestService {
     /** 单档回测。 */
     public BacktestReport run(RunSpec spec) {
         Resolved r = resolve(spec.symbol(), spec.timeframe(), spec.from(), spec.to());
-        RuleStrategy strategy = strategyByKey(spec.strategyKey());
+        StrategyRef strategy = strategyByKey(spec.strategyKey());
         Long strategyId = resolveStrategyId(spec.strategyId());
         int spread = spec.spreadPoints() == null ? 0 : spec.spreadPoints();
         int slippage = spec.slippagePoints() == null ? props.getDefaultSlippage() : spec.slippagePoints();
         validateSpread(spread);
         validateSlippage(slippage);
-        return execute(r, strategy, spread, slippage, strategyId);
+        double initialEquity = spec.initialEquity() == null ? props.getInitialEquity() : spec.initialEquity();
+        return execute(r, strategy, spread, slippage, strategyId, initialEquity);
     }
 
     /** 点差/滑点多档扫描（设计 §13.4）。 */
     public TierScanResult runTiers(TierSpec spec) {
         Resolved r = resolve(spec.symbol(), spec.timeframe(), spec.from(), spec.to());
-        RuleStrategy strategy = strategyByKey(spec.strategyKey());
+        StrategyRef strategy = strategyByKey(spec.strategyKey());
         Long strategyId = resolveStrategyId(spec.strategyId());
+        double initialEquity = spec.initialEquity() == null ? props.getInitialEquity() : spec.initialEquity();
 
         List<Integer> spreads = (spec.spreads() == null || spec.spreads().isEmpty())
                 ? props.getSpreadTiers() : spec.spreads();
@@ -132,7 +145,7 @@ public class BacktestService {
         int barCount = 0;
         for (Integer spread : spreads) {
             for (Integer slippage : slippages) {
-                BacktestReport report = execute(r, strategy, spread, slippage, strategyId);
+                BacktestReport report = execute(r, strategy, spread, slippage, strategyId, initialEquity);
                 barCount = report.barCount();
                 tiers.add(new TierScanResult.TierSummary(report.runId(), report.spreadPoints(),
                         report.slippagePoints(), report.tradeCount(), report.winRatePct(),
@@ -149,18 +162,45 @@ public class BacktestService {
         if (run == null) {
             throw new BizException(ResultCode.PARAM_ERROR.code(), "回测记录不存在：id=" + runId, 404);
         }
+        List<BacktestTrade> rows = tradeMapper.listByRunId(runId);
         List<ClosedTrade> trades = new ArrayList<>();
-        for (BacktestTrade t : tradeMapper.listByRunId(runId)) {
+        boolean basket = false;
+        for (BacktestTrade t : rows) {
+            int cycleNo = t.getCycleNo() == null ? 0 : t.getCycleNo();
+            if (cycleNo > 0) {
+                basket = true;
+            }
+            String kind = (t.getEngineKind() == null || t.getEngineKind().isBlank()) ? "STORED" : t.getEngineKind();
+            String reason = (t.getExitReason() == null || t.getExitReason().isBlank()) ? "STORED" : t.getExitReason();
             trades.add(new ClosedTrade(0, 0, t.getOpenTime(), t.getCloseTime(),
                     com.benmao.quanta.risk.RiskSide.valueOf(t.getCmd()),
                     d(t.getVolume()), d(t.getOpenPrice()), d(t.getClosePrice()),
                     d(t.getSl()), d(t.getTp()), d(t.getProfit()), d(t.getSwap()),
-                    t.getHoldSec() == null ? 0 : t.getHoldSec(), "STORED"));
+                    t.getHoldSec() == null ? 0 : t.getHoldSec(), reason, cycleNo,
+                    t.getLevel() == null ? 0 : t.getLevel(), kind));
         }
-        double net = trades.stream().mapToDouble(ClosedTrade::netProfit).sum();
-        double grossProfit = trades.stream().mapToDouble(t -> Math.max(0, t.netProfit())).sum();
-        double grossLoss = trades.stream().mapToDouble(t -> Math.min(0, t.netProfit())).sum();
-        double expectancy = trades.isEmpty() ? 0 : net / trades.size();
+        // 轮级口径：多腿策略按 cycle_no 聚合腿的净利为「轮」；单仓策略每笔即一轮。
+        List<Double> unitNets = new ArrayList<>();
+        if (basket) {
+            Map<Integer, Double> byCycle = new LinkedHashMap<>();
+            for (BacktestTrade t : rows) {
+                int c = t.getCycleNo() == null ? 0 : t.getCycleNo();
+                byCycle.merge(c, d(t.getProfit()) + d(t.getSwap()), Double::sum);
+            }
+            unitNets.addAll(byCycle.values());
+        } else {
+            for (BacktestTrade t : rows) {
+                unitNets.add(d(t.getProfit()) + d(t.getSwap()));
+            }
+        }
+        double net = unitNets.stream().mapToDouble(Double::doubleValue).sum();
+        double grossProfit = unitNets.stream().mapToDouble(v -> Math.max(0, v)).sum();
+        double grossLoss = unitNets.stream().mapToDouble(v -> Math.min(0, v)).sum();
+        double expectancy = unitNets.isEmpty() ? 0 : net / unitNets.size();
+        int maxLosing = longestLosingRun(unitNets);
+        double avgLevels = unitNets.isEmpty() || !basket ? 1.0 : (double) rows.size() / unitNets.size();
+        double initial = initialEquityOf(run);
+        int cycleCount = basket ? unitNets.size() : rows.size();
         String name = run.getStrategyId() == null ? null : strategyName(run.getStrategyId());
         return new BacktestReport(run.getId(), null, name, run.getSymbol(), run.getDataTimeframe(),
                 run.getStartTime(), run.getEndTime(), trades.size(), run.getSpreadMode(),
@@ -169,30 +209,45 @@ public class BacktestService {
                 d(run.getWinRate()), d(run.getProfitFactor()), d(run.getMaxDrawdown()),
                 run.getAvgHoldSec() == null ? 0 : run.getAvgHoldSec(), round2(expectancy),
                 round2(grossProfit), round2(grossLoss), round2(net),
-                props.getInitialEquity(), round2(props.getInitialEquity() + net),
-                props.getDisclaimer(), trades);
+                initial, round2(initial + net),
+                props.getDisclaimer(), trades, cycleCount, maxLosing, round2(avgLevels));
     }
 
     // ==================== 内部实现 ====================
 
-    private BacktestReport execute(Resolved r, RuleStrategy strategy, int spread, int slippage, Long strategyId) {
+    private BacktestReport execute(Resolved r, StrategyRef strategy, int spread, int slippage, Long strategyId,
+                                   double initialEquity) {
         List<KlineBar> bars = loadBars(r);
-        ReplayEngine engine = new ReplayEngine(props, clock.getZone());
-        EngineResult result = engine.run(bars, strategy.newRunner(), spread, slippage);
-        Stats stats = computeStats(result);
-        BacktestRun run = persistRun(r, strategy, spread, slippage, stats, strategyId);
-        persistTrades(run.getId(), result.trades());
-        log.info("回测完成：runId={}, strategy={}, symbol={}, timeframe={}, spread={}, slippage={}, "
-                        + "bars={}, trades={}, winRate={}%, pf={}, net={}",
-                run.getId(), strategy.key(), r.symbol(), r.timeframe(), spread, slippage,
-                bars.size(), stats.tradeCount(), stats.winRatePct(), stats.profitFactor(), stats.netProfit());
+        Stats stats;
+        List<ClosedTrade> trades;
+        double finalEquity;
+        if (strategy.family() == Family.BASKET) {
+            BasketReplayEngine engine = new BasketReplayEngine(props, basketProps, clock.getZone());
+            BasketEngineResult result = engine.run(bars, strategy.basket(), spread, slippage, initialEquity);
+            stats = computeBasketStats(result);
+            trades = result.trades();
+            finalEquity = result.finalEquity();
+        } else {
+            ReplayEngine engine = new ReplayEngine(props, clock.getZone());
+            EngineResult result = engine.run(bars, strategy.rule().newRunner(), spread, slippage, initialEquity);
+            stats = computeStats(result);
+            trades = result.trades();
+            finalEquity = result.finalEquity();
+        }
+        BacktestRun run = persistRun(r, strategy, spread, slippage, stats, strategyId, initialEquity);
+        persistTrades(run.getId(), trades);
+        log.info("回测完成：runId={}, strategy={}, family={}, symbol={}, timeframe={}, spread={}, slippage={}, "
+                        + "bars={}, trades={}, cycles={}, winRate={}%, pf={}, net={}",
+                run.getId(), strategy.key(), strategy.family(), r.symbol(), r.timeframe(), spread, slippage,
+                bars.size(), stats.tradeCount(), stats.cycleCount(), stats.winRatePct(), stats.profitFactor(),
+                stats.netProfit());
         String name = strategyId != null ? strategyName(strategyId) : strategy.displayName();
         return new BacktestReport(run.getId(), strategy.key(), name, r.symbol(), r.timeframe(),
                 r.from(), r.to(), bars.size(), run.getSpreadMode(), spread, slippage, props.isSwapOn(),
                 stats.tradeCount(), stats.winRatePct(), stats.profitFactor(), stats.maxDrawdown(),
                 stats.avgHoldSec(), stats.expectancy(), stats.grossProfit(), stats.grossLoss(),
-                stats.netProfit(), props.getInitialEquity(), result.finalEquity(),
-                props.getDisclaimer(), result.trades());
+                stats.netProfit(), initialEquity, finalEquity, props.getDisclaimer(), trades,
+                stats.cycleCount(), stats.maxLosingCycles(), stats.avgLevels());
     }
 
     private List<KlineBar> loadBars(Resolved r) {
@@ -212,8 +267,10 @@ public class BacktestService {
         return bars;
     }
 
+    /** 单仓口径统计：每笔成交即一轮（cycleCount=tradeCount、avgLevels=1.0）。 */
     private Stats computeStats(EngineResult result) {
         List<ClosedTrade> trades = result.trades();
+        List<Double> nets = new ArrayList<>(trades.size());
         int n = trades.size();
         double grossProfit = 0;
         double grossLoss = 0;
@@ -222,6 +279,7 @@ public class BacktestService {
         int wins = 0;
         for (ClosedTrade t : trades) {
             double net = t.netProfit();
+            nets.add(net);
             sumNet += net;
             sumHold += t.holdSec();
             if (net > 0) {
@@ -243,28 +301,87 @@ public class BacktestService {
         double net = result.finalEquity() - result.initialEquity();
         return new Stats(n, round2(winRate), round2(Math.min(profitFactor, PROFIT_FACTOR_CAP)),
                 round2(result.maxDrawdown()), avgHold, expectancy,
-                round2(grossProfit), round2(grossLoss), round2(net));
+                round2(grossProfit), round2(grossLoss), round2(net), n, longestLosingRun(nets), 1.0);
     }
 
-    private BacktestRun persistRun(Resolved r, RuleStrategy strategy, int spread, int slippage, Stats stats,
-                                   Long strategyId) {
+    /** 多腿/网格口径统计：<b>轮级</b>（tradeCount/胜率/期望均按轮，而非按腿）。 */
+    private Stats computeBasketStats(BasketEngineResult result) {
+        List<BasketEngineResult.CycleSummary> cycles = result.cycles();
+        int n = cycles.size();
+        double grossProfit = 0;
+        double grossLoss = 0;
+        double sumNet = 0;
+        double sumLevels = 0;
+        long sumHold = 0;
+        int wins = 0;
+        List<Double> nets = new ArrayList<>(n);
+        for (BasketEngineResult.CycleSummary c : cycles) {
+            double net = c.netProfit();
+            nets.add(net);
+            sumNet += net;
+            sumHold += c.holdSec();
+            sumLevels += c.levels();
+            if (net > 0) {
+                wins++;
+                grossProfit += net;
+            } else if (net < 0) {
+                grossLoss += net;
+            }
+        }
+        double winRate = n == 0 ? 0 : 100.0 * wins / n;
+        double profitFactor;
+        if (grossLoss < 0) {
+            profitFactor = grossProfit / (-grossLoss);
+        } else {
+            profitFactor = grossProfit > 0 ? PROFIT_FACTOR_CAP : 0;
+        }
+        int avgHold = n == 0 ? 0 : (int) Math.round((double) sumHold / n);
+        double expectancy = n == 0 ? 0 : sumNet / n;
+        double net = result.finalEquity() - result.initialEquity();
+        double avgLevels = n == 0 ? 0 : sumLevels / n;
+        return new Stats(n, round2(winRate), round2(Math.min(profitFactor, PROFIT_FACTOR_CAP)),
+                round2(result.maxDrawdown()), avgHold, expectancy,
+                round2(grossProfit), round2(grossLoss), round2(net), n,
+                longestLosingRun(nets), round2(avgLevels));
+    }
+
+    /** 最长连续净亏「轮/笔」数（0 视为非亏，重置计数）。 */
+    private static int longestLosingRun(List<Double> nets) {
+        int max = 0;
+        int cur = 0;
+        for (double v : nets) {
+            if (v < 0) {
+                cur++;
+                max = Math.max(max, cur);
+            } else {
+                cur = 0;
+            }
+        }
+        return max;
+    }
+
+    private BacktestRun persistRun(Resolved r, StrategyRef strategy, int spread, int slippage, Stats stats,
+                                   Long strategyId, double initialEquity) {
         BacktestRun run = new BacktestRun();
-        run.setStrategyId(strategyId != null ? strategyId : ensureBuiltInStrategy(strategy));
+        run.setStrategyId(strategyId != null ? strategyId : ensureBuiltInStrategy(strategy, initialEquity));
         run.setSymbol(r.symbol());
         run.setDataTimeframe(r.timeframe());
         run.setStartTime(r.from());
         run.setEndTime(r.to());
-        run.setParams(paramsJson(strategy, spread, slippage));
+        run.setParams(paramsJson(strategy, spread, slippage, initialEquity));
         run.setSpreadMode(spread == 0 ? "OFF" : "FIXED");
         run.setSpread(BigDecimal.valueOf(spread));
         run.setSlippage(BigDecimal.valueOf(slippage));
         run.setSwapOn(props.isSwapOn());
-        run.setMode("RULE");
+        run.setMode(strategy.family().name());
         run.setWinRate(BigDecimal.valueOf(stats.winRatePct()));
         run.setProfitFactor(BigDecimal.valueOf(stats.profitFactor()));
         run.setMaxDrawdown(BigDecimal.valueOf(stats.maxDrawdown()));
         run.setTradeCount(stats.tradeCount());
         run.setAvgHoldSec(stats.avgHoldSec());
+        run.setCycleCount(stats.cycleCount());
+        run.setMaxLosingCycles(stats.maxLosingCycles());
+        run.setAvgLevels(BigDecimal.valueOf(stats.avgLevels()));
         run.setStatus("DONE");
         runMapper.insert(run);
         return run;
@@ -285,12 +402,16 @@ public class BacktestService {
             e.setProfit(BigDecimal.valueOf(t.profit()));
             e.setSwap(BigDecimal.valueOf(t.swap()));
             e.setHoldSec(t.holdSec());
+            e.setExitReason(t.exitReason());
+            e.setCycleNo(t.cycleNo());
+            e.setLevel(t.level());
+            e.setEngineKind(t.engineKind());
             tradeMapper.insert(e);
         }
     }
 
-    /** 幂等获取内置规则策略行（回测落库需要 strategy_id 非空）。 */
-    private Long ensureBuiltInStrategy(RuleStrategy strategy) {
+    /** 幂等获取内置策略行（回测落库需要 strategy_id 非空）。 */
+    private Long ensureBuiltInStrategy(StrategyRef strategy, double initialEquity) {
         String name = "内置规则-" + strategy.key();
         Strategy existing = strategyMapper.findByNameVersion(name, 1);
         if (existing != null) {
@@ -303,10 +424,10 @@ public class BacktestService {
         s.setStatus("DRAFT");
         s.setOrigin("MANUAL");
         s.setApproved(false);
-        s.setRegimeType("TREND");
+        s.setRegimeType(strategy.family() == Family.BASKET ? "RANGE" : "TREND");
         s.setTargetRr(BigDecimal.valueOf(props.getStrategy().getTargetRr()));
-        s.setIndicatorParams(paramsJson(strategy, 0, props.getDefaultSlippage()));
-        s.setDescription("M8 回测内置 RULE 示例规则，作为 M9 真策略（Prompt → 规则）的落地模板");
+        s.setIndicatorParams(paramsJson(strategy, 0, props.getDefaultSlippage(), initialEquity));
+        s.setDescription("M8 回测内置策略规则，作为 M9 真策略（Prompt → 规则）的落地模板");
         strategyMapper.insert(s);
         return s.getId();
     }
@@ -316,14 +437,30 @@ public class BacktestService {
         return s == null ? null : s.getName();
     }
 
-    private RuleStrategy strategyByKey(String key) {
+    private StrategyRef strategyByKey(String key) {
         String k = (key == null || key.isBlank()) ? com.benmao.quanta.backtest.rule.EmaAtrRuleStrategy.KEY : key.trim();
-        RuleStrategy s = strategies.get(k);
+        StrategyRef s = strategies.get(k);
         if (s == null) {
             throw new BizException(ResultCode.PARAM_ERROR.code(),
                     "不支持的策略：" + key + "，可选：" + strategies.keySet(), 400);
         }
         return s;
+    }
+
+    /** 从落库 params JSON 还原本次回测的初始权益（缺省回退配置默认值）。 */
+    private double initialEquityOf(BacktestRun run) {
+        String p = run.getParams();
+        if (p != null && !p.isBlank()) {
+            try {
+                JsonNode n = MAPPER.readTree(p);
+                if (n.hasNonNull("initialEquity")) {
+                    return n.get("initialEquity").asDouble();
+                }
+            } catch (JsonProcessingException ignored) {
+                // 老数据参数非 JSON 时回退默认
+            }
+        }
+        return props.getInitialEquity();
     }
 
     private Resolved resolve(String symbol, String timeframe, String from, String to) {
@@ -393,10 +530,12 @@ public class BacktestService {
         return "在高成本档（" + fmt(high.spreadPoints()) + " 点差）下期望为负 → 脆弱（或靠低成本吃饭），实盘危险";
     }
 
-    private String paramsJson(RuleStrategy strategy, int spread, int slippage) {
+    private String paramsJson(StrategyRef strategy, int spread, int slippage, double initialEquity) {
         Map<String, Object> m = new LinkedHashMap<>(strategy.indicatorParams());
         m.put("strategyKey", strategy.key());
+        m.put("family", strategy.family().name());
         m.put("volume", props.getVolume());
+        m.put("initialEquity", initialEquity);
         m.put("spread", spread);
         m.put("slippage", slippage);
         m.put("spreadSideFactor", props.getSpreadSideFactor());
@@ -441,12 +580,19 @@ public class BacktestService {
                           Integer spreadPoints,
                           Integer slippagePoints,
                           String strategyKey,
-                          Long strategyId) {
+                          Long strategyId,
+                          Double initialEquity) {
 
         /** 兼容构造：不关联真实策略行（回测落库改用内置规则行）。 */
         public RunSpec(String symbol, String timeframe, String from, String to,
                        Integer spreadPoints, Integer slippagePoints, String strategyKey) {
-            this(symbol, timeframe, from, to, spreadPoints, slippagePoints, strategyKey, null);
+            this(symbol, timeframe, from, to, spreadPoints, slippagePoints, strategyKey, null, null);
+        }
+
+        /** 兼容构造：不覆盖初始权益（回退配置默认值）。 */
+        public RunSpec(String symbol, String timeframe, String from, String to,
+                       Integer spreadPoints, Integer slippagePoints, String strategyKey, Long strategyId) {
+            this(symbol, timeframe, from, to, spreadPoints, slippagePoints, strategyKey, strategyId, null);
         }
     }
 
@@ -458,22 +604,48 @@ public class BacktestService {
                            String strategyKey,
                            List<Integer> spreads,
                            List<Integer> slippages,
-                           Long strategyId) {
+                           Long strategyId,
+                           Double initialEquity) {
 
-        /** 兼容构造：不关联真实策略行。 */
+        /** 兼容构造：不关联真实策略行、不覆盖初始权益。 */
         public TierSpec(String symbol, String timeframe, String from, String to,
                         String strategyKey, List<Integer> spreads, List<Integer> slippages) {
-            this(symbol, timeframe, from, to, strategyKey, spreads, slippages, null);
+            this(symbol, timeframe, from, to, strategyKey, spreads, slippages, null, null);
         }
     }
 
-    /** 可用策略视图。 */
-    public record StrategyView(String key, String name) {
+    /** 可用策略视图（family=SINGLE_LEG/BASKET，供前端区分单仓与多腿/网格）。 */
+    public record StrategyView(String key, String name, String family) {
+
+        /** 兼容构造：默认单仓族。 */
+        public StrategyView(String key, String name) {
+            this(key, name, "SINGLE_LEG");
+        }
+    }
+
+    /** 策略族：单仓（ReplayEngine）或多腿/网格（BasketReplayEngine）。 */
+    private enum Family { SINGLE_LEG, BASKET }
+
+    /** 策略解析引用（按族分派执行引擎）。 */
+    private record StrategyRef(Family family, RuleStrategy rule, BasketStrategy basket) {
+
+        String key() {
+            return family == Family.BASKET ? basket.key() : rule.key();
+        }
+
+        String displayName() {
+            return family == Family.BASKET ? basket.displayName() : rule.displayName();
+        }
+
+        Map<String, Object> indicatorParams() {
+            return family == Family.BASKET ? basket.indicatorParams() : rule.indicatorParams();
+        }
     }
 
     private record Resolved(String symbol, String timeframe, LocalDateTime from, LocalDateTime to) {
     }
 
+    /** 回测统计（轮级口径：tradeCount/cycleCount 对多腿策略=轮数）。 */
     private record Stats(int tradeCount,
                          double winRatePct,
                          double profitFactor,
@@ -482,6 +654,9 @@ public class BacktestService {
                          double expectancy,
                          double grossProfit,
                          double grossLoss,
-                         double netProfit) {
+                         double netProfit,
+                         int cycleCount,
+                         int maxLosingCycles,
+                         double avgLevels) {
     }
 }

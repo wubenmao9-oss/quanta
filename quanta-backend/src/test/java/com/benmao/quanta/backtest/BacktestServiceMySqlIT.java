@@ -55,8 +55,8 @@ class BacktestServiceMySqlIT {
 
     /** 用固定时钟构造服务，保证 from/to 与库内 bar_time 口径一致。 */
     private BacktestService service() {
-        return new BacktestService(props, klineMapper, runMapper, tradeMapper, strategyMapper,
-                List.of(new CycleStrategy()), Clock.systemDefaultZone());
+        return new BacktestService(props, new BasketStrategyProperties(), klineMapper, runMapper, tradeMapper,
+                strategyMapper, List.of(new CycleStrategy()), List.of(), Clock.systemDefaultZone());
     }
 
     @Test
@@ -83,7 +83,7 @@ class BacktestServiceMySqlIT {
             assertNotNull(row, "backtest_run 应已落库");
             assertEquals(symbol, row.getSymbol());
             assertEquals("M1", row.getDataTimeframe());
-            assertEquals("RULE", row.getMode(), "M8 为 RULE 模式，不调 LLM");
+            assertEquals("SINGLE_LEG", row.getMode(), "M8 为单仓族（RULE 模式，不调 LLM）");
             assertEquals("DONE", row.getStatus());
             assertEquals("FIXED", row.getSpreadMode());
             assertEquals(0, row.getSpread().compareTo(new java.math.BigDecimal("16")),
